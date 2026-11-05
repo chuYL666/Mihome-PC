@@ -6,7 +6,7 @@ import shiboken6
 from PySide6.QtCore import QEvent, QPoint, QTimer, QUrl, Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtMultimedia import QMediaPlayer, QVideoSink, QAudioSink, QAudioFormat
-from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 from app.core.camera_preview import CameraPreviewError, CameraSession, ERRORS
 from app.ui.camera_canvas import AspectVideoLayout, CameraCanvas
 from app.ui.power_button import PowerButton
@@ -24,6 +24,8 @@ class CameraPreviewPanel(QFrame):
     def __init__(self, service, jobs, device, parent=None):
         super().__init__(parent)
         self._service, self._jobs, self._device = service, jobs, device
+        self._diagnostic_since = time.monotonic()
+        self._diagnostic = {'attempted': False, 'stage': 'idle', 'timeline': []}
         self._session = None
         self._generation = 0
         self._playing = False
@@ -54,6 +56,9 @@ class CameraPreviewPanel(QFrame):
         labels.addWidget(self._title)
         labels.addWidget(self._room)
         self.header.addLayout(labels, 1)
+        self._diagnostic_button = QPushButton('诊断报告')
+        self._diagnostic_button.clicked.connect(self._show_diagnostics)
+        self.header.addWidget(self._diagnostic_button)
         self._power = PowerButton(44, 28, self)
         self._power.set_online(device.online)
         self._power.setToolTip('摄像头开关')
@@ -95,6 +100,26 @@ class CameraPreviewPanel(QFrame):
         QApplication.instance().aboutToQuit.connect(self.stop)
         self.retheme()
 
+    def _show_diagnostics(self):
+        from app.ui.diagnostic_dialog import show_device_diagnostics
+        show_device_diagnostics(self, self._service, self._jobs, [self._device], self._diagnostic_snapshot)
+
+    def _diagnostic_snapshot(self):
+        result = dict(self._diagnostic)
+        result['timeline'] = list(result['timeline'])
+        return result
+
+    def _record_diagnostic(self, stage, code=None, **values):
+        self._diagnostic.update(stage=stage, elapsed_ms=round((time.monotonic() - self._diagnostic_since) * 1000), **values)
+        if code is not None:
+            self._diagnostic['error_code'] = code
+        self._diagnostic['timeline'].append({'stage': stage, 'code': code,
+                                              'elapsed_ms': self._diagnostic['elapsed_ms']})
+        self._diagnostic['timeline'] = self._diagnostic['timeline'][-24:]
+        recorder = getattr(self._service, 'record_device_observation', None)
+        if callable(recorder):
+            recorder(self._device.did, self._diagnostic_snapshot())
+
     def retheme(self):
         self.setStyleSheet('QFrame { background: transparent; border: none; }')
         self._title.setStyleSheet(f'color: {SiColors.TEXT_PRIMARY}; background: transparent; font-size: 15pt; font-weight: 600;')
@@ -105,6 +130,8 @@ class CameraPreviewPanel(QFrame):
         self._hint_slot.setFixedHeight(self._drag_hint.sizeHint().height())
         QTimer.singleShot(0, self, self._position_drag_hint)
         self._power._apply()
+        self._diagnostic_button.setStyleSheet(f'QPushButton {{ background: {SiColors.SURFACE}; '
+            f'color: {SiColors.TEXT_SECONDARY}; border: none; border-radius: 8px; padding: 7px 12px; }}')
 
     def _position_drag_hint(self):
         if self._fullscreen is not None or not self._drag_hint.isVisible():
@@ -144,18 +171,30 @@ class CameraPreviewPanel(QFrame):
             if self._power_busy or (time.monotonic() < self._power_deadline and state != self._power_state):
                 return
             if state is None:
-                if self._power_state is None:
-                    self._canvas.message('暂时无法读取摄像头状态，点击画面重试')
+                if not self._attempted:
+                    self._record_diagnostic('power', 'POWER_UNKNOWN', power_readable=False)
+                self._continue_without_power_state()
                 return
             self._apply_power(bool(state))
         def failure(_):
             if shiboken6.isValid(self):
                 self._read_pending = False
-                if self._power_state is None:
-                    self._canvas.message('读取摄像头状态失败，点击画面重试')
+                if not self._attempted:
+                    self._record_diagnostic('power', 'POWER_READ_FAILED', power_readable=False)
+                self._continue_without_power_state()
         self._jobs.submit(lambda: self._service.power_state(self._device.did), on_success=success, on_error=failure)
 
+    def _continue_without_power_state(self):
+        # A camera may expose video without a readable/writable MIoT power
+        # property. Unknown power must not prevent independent video auth.
+        if self._power_state is None:
+            self._power.hide()
+            if self.isVisible() and not self._attempted and self._session is None:
+                self.start()
+
     def _apply_power(self, state):
+        self._diagnostic['power_readable'] = True
+        self._power.show()
         previous = self._power_state
         self._power_state = state
         self._power.set_state(state)
@@ -194,16 +233,22 @@ class CameraPreviewPanel(QFrame):
         self._jobs.submit(lambda: self._service.set_power_state(self._device.did, target), on_success=success, on_error=failure)
 
     def _retry(self):
-        if self._power_state is None:
-            self._refresh_power()
-        elif self._power_state and not self._session:
+        if self._power_state is not False and self._session is None:
             self.start()
 
     def start(self):
         if not self._device.online or self._power_state is False:
+            if not self._device.online:
+                self._record_diagnostic('idle', 'OFFLINE')
             self._canvas.message('摄像头已离线' if not self._device.online else '摄像机已休眠', sleeping=self._power_state is False)
             return
         self.stop()
+        self._diagnostic_since = time.monotonic()
+        power = self._diagnostic.get('power_readable')
+        self._diagnostic = {'attempted': True, 'video_received': False, 'error_code': 'NONE', 'timeline': []}
+        if type(power) is bool:
+            self._diagnostic['power_readable'] = power
+        self._record_diagnostic('authorization')
         self._attempted = True
         session = CameraSession()
         self._session = session
@@ -247,6 +292,7 @@ class CameraPreviewPanel(QFrame):
     def _on_connected(self, generation, url):
         if generation != self._generation or self._session is None:
             return
+        self._record_diagnostic('decode')
         self._canvas.message('正在载入画面…')
         self._url = url
         self._timeout.start(25000)
@@ -257,6 +303,7 @@ class CameraPreviewPanel(QFrame):
 
     def _on_failed(self, generation, error):
         if generation == self._generation:
+            self._record_diagnostic(self._diagnostic.get('stage', 'idle'), getattr(error, 'code', 'UNKNOWN'))
             self.stop()
             safe = str(error) if isinstance(error, CameraPreviewError) else '视频连接失败，请点击画面重试'
             self._canvas.message(safe)
@@ -265,15 +312,20 @@ class CameraPreviewPanel(QFrame):
         if generation != self._generation:
             return
         if message.startswith('ERROR '):
-            self._on_failed(generation, CameraPreviewError(ERRORS.get(message[6:], '远程视频连接中断，请重试。')))
+            self._on_failed(generation, CameraPreviewError(ERRORS.get(message[6:], '远程视频连接中断，请重试。'), code=message[6:]))
         elif message == 'NOTICE AUDIO_UNSUPPORTED':
+            self._record_diagnostic(self._diagnostic.get('stage', 'media'), 'AUDIO_UNSUPPORTED')
             self._muted = True
             self._stop_audio()
             self._canvas.set_muted(True)
             self._canvas.mute.setToolTip('此设备的音频编码暂不支持')
         elif message == 'NOTICE CONTROL_FAILED':
+            self._record_diagnostic(self._diagnostic.get('stage', 'playing'), 'CONTROL_FAILED')
             self._canvas.message('摄像头未能执行控制指令，请重试', clear=False)
         else:
+            stage = {'PHASE RELAY': 'relay', 'PHASE AUTH': 'session_auth', 'PHASE MEDIA': 'media'}.get(message)
+            if stage:
+                self._record_diagnostic(stage)
             text = {'PHASE RELAY': '正在连接摄像头公网中继…', 'PHASE AUTH': '中继已连接，正在验证视频会话…',
                     'PHASE MEDIA': '视频授权已完成，正在等待摄像头画面…'}.get(message)
             if text:
@@ -285,6 +337,9 @@ class CameraPreviewPanel(QFrame):
         image = frame.toImage()
         if image.isNull():
             return
+        if (not self._diagnostic.get('video_received') or self._diagnostic.get('width') != frame.width()
+                or self._diagnostic.get('height') != frame.height()):
+            self._record_diagnostic('playing', video_received=True, width=frame.width(), height=frame.height())
         self._playing = True
         self._timeout.stop()
         self._canvas.set_frame(image)
@@ -302,9 +357,11 @@ class CameraPreviewPanel(QFrame):
 
     def _on_player_error(self, error, _message):
         if self._session is not None and not self._switching_quality and error != QMediaPlayer.Error.NoError:
-            self._on_failed(self._generation, CameraPreviewError('已连接视频流，但画面解码失败。点击画面重试。'))
+            self._diagnostic['player_error'] = error.value
+            self._on_failed(self._generation, CameraPreviewError('已连接视频流，但画面解码失败。点击画面重试。', code='DECODE'))
 
     def _on_timeout(self):
+        self._record_diagnostic(self._diagnostic.get('stage', 'idle'), 'TIMEOUT')
         self.stop()
         self._canvas.message('远程预览超时，请点击画面重试')
 

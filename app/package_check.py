@@ -161,6 +161,26 @@ def check_package(report_path: str) -> int:
             slider.close()
             slider.deleteLater()
         report['checks'].append('light-dark-widget-rendering')
+        from types import SimpleNamespace
+        from app.core.models import DeviceInfo
+        from app.core.diagnostics import build_report
+        from app.ui.diagnostic_dialog import DiagnosticDialog
+        sample = DeviceInfo('private-test-id', 'private-test-name', 'example.camera.test', '', '', True)
+        sample_report = build_report(sample, observation={'attempted': True, 'stage': 'relay', 'error_code': 'RELAY'})
+        if 'private-test-' in sample_report or '"error_code": "RELAY"' not in sample_report:
+            raise RuntimeError('Diagnostic report privacy or error serialization failed')
+        class DiagnosticJobs:
+            def submit(self, function, on_success=None, on_error=None):
+                on_success(function())
+        diagnostic = DiagnosticDialog(SimpleNamespace(device_diagnostic_report=lambda *_: sample_report),
+                                      DiagnosticJobs(), [sample])
+        diagnostic.show()
+        application.processEvents()
+        if diagnostic.grab().isNull() or not diagnostic.copy.isEnabled() or diagnostic.preview.toPlainText() != sample_report:
+            raise RuntimeError('Diagnostic report window failed')
+        diagnostic.close()
+        diagnostic.deleteLater()
+        report['checks'].append('device-diagnostic-report-offline-check')
         from app.ui.tray_intro import TrayIntroDialog
         introduction = TrayIntroDialog()
         introduction.show()

@@ -46,7 +46,9 @@ def launch_camera_helper(args, **kwargs):
 
 
 class CameraPreviewError(Exception):
-    pass
+    def __init__(self, message, *, code='UNKNOWN'):
+        super().__init__(message)
+        self.code = code
 
 
 ERRORS = {
@@ -84,13 +86,13 @@ class CameraSession:
             raise
         except Exception:
             self.stop()
-            raise CameraPreviewError("远程视频连接启动失败，请稍后重试。") from None
+            raise CameraPreviewError("远程视频连接启动失败，请稍后重试。", code='CONFIG') from None
 
     def _start(self, source, on_progress, quality, on_audio):
         java = resource_path("tools/camera_relay/runtime/bin/java.exe")
         jar = resource_path("tools/camera_relay/camera-relay.jar")
         if not java.exists() or not jar.exists():
-            raise CameraPreviewError("缺少远程摄像头组件，请安装后重试。")
+            raise CameraPreviewError("缺少远程摄像头组件，请安装后重试。", code='CONFIG')
         port, path = _free_port(), "/camera-" + uuid.uuid4().hex + ".ts"
         fields = [str(port), path, source.uid, source.init_string, source.client_public,
                   source.client_private, source.device_public, source.sign, str(quality)]
@@ -155,11 +157,12 @@ class CameraSession:
                 self._ready = True
                 return f"http://127.0.0.1:{port}{path}"
             if message.startswith("ERROR "):
-                raise CameraPreviewError(ERRORS[message[6:]])
+                raise CameraPreviewError(ERRORS[message[6:]], code=message[6:])
             if message == "EXIT":
-                raise CameraPreviewError("远程播放组件意外退出，请重试。")
+                raise CameraPreviewError("远程播放组件意外退出，请重试。", code='HELPER_EXIT')
             on_progress(message)
-        raise CameraPreviewError("预览已取消。" if self.cancelled else "远程视频连接超时，请重试。")
+        raise CameraPreviewError("预览已取消。" if self.cancelled else "远程视频连接超时，请重试。",
+                                 code='CANCELLED' if self.cancelled else 'TIMEOUT')
 
     def command(self, name, value):
         allowed = {"QUALITY": (0, 1, 2), "AUDIO": (0, 1), "PTZ": (1, 2, 3, 4)}

@@ -16,19 +16,23 @@ class CameraSource:
     sign: str
 
 
-def build_camera_source(did: str, model: str, cloud_request) -> CameraSource:
+def build_camera_source(did: str, model: str, cloud_request, diagnostic=lambda **_: None) -> CameraSource:
     key = ECC.generate(curve="Curve25519")
     public = key.public_key().export_key(format="raw").hex()
     response = cloud_request("/v2/device/miss_get_vendor", {
         "did": str(did), "app_pubkey": public, "support_vendors": "TUTK_CS2_MTP"})
     vendor = response.get("vendor") or {}
-    if vendor.get("vendor") != 4:
-        raise CameraPreviewError("当前远程预览仅支持 CS2 摄像头，该设备的视频传输方式暂未接入。")
     params = vendor.get("vendor_params") or {}
+    diagnostic(vendor_id=vendor.get('vendor'), protocol='CS2' if vendor.get('vendor') == 4 else 'unrecognized',
+        authorization_fields_present={
+            'p2p_id': bool(params.get('p2p_id')), 'init_string': bool(params.get('init_string')),
+            'public_key': bool(response.get('public_key')), 'sign': bool(response.get('sign'))})
+    if vendor.get("vendor") != 4:
+        raise CameraPreviewError("当前远程预览仅支持 CS2 摄像头，该设备的视频传输方式暂未接入。", code='VENDOR_UNSUPPORTED')
     values = [params.get("p2p_id"), params.get("init_string"), public, key.seed.hex(),
               response.get("public_key"), response.get("sign")]
     if any(not isinstance(v, str) or not v or len(v) > 16384 or "\n" in v or "\r" in v for v in values):
-        raise CameraPreviewError("米家未返回完整的远程视频授权或中继地址，请确认摄像头在线后重试。")
+        raise CameraPreviewError("米家未返回完整的远程视频授权或中继地址，请确认摄像头在线后重试。", code='AUTH_FIELDS')
     if not re.fullmatch(r"[0-9a-fA-F]{64}", values[4]):
-        raise CameraPreviewError("米家返回的视频密钥格式不完整，请重试。")
+        raise CameraPreviewError("米家返回的视频密钥格式不完整，请重试。", code='AUTH_KEY')
     return CameraSource(*values)

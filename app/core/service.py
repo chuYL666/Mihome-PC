@@ -165,6 +165,7 @@ class MijiaService:
         self._api = mijiaAPI(auth_data_path=str(path))
         self._device_cache.clear()
         self._device_index.clear()
+        self._camera_observations = {}
         self._panel_parents = None
         self._home_ids = None
 
@@ -243,6 +244,7 @@ class MijiaService:
                 online=bool(d.get("isOnline", False)),
                 # 云端对无公开规格的设备（手表、第三方牙刷等）不下发该字段
                 spec_type=d.get("spec_type") or "",
+                firmware=(d.get('extra') or {}).get('fw_version', '') if isinstance(d.get('extra'), dict) else '',
             ))
         from .device_controls import is_light, light_controls, prepare_device_cards, is_status_candidate
         candidates = [device for device in result if is_light(device) or is_status_candidate(device)]
@@ -273,9 +275,40 @@ class MijiaService:
         from .camera_preview import CameraPreviewError
         if not device.online:
             raise CameraPreviewError("摄像头当前离线，请先确认电源和网络。")
-        return build_camera_source(device.did, device.model, self._camera_cloud_request)
+        observations = getattr(self, '_camera_observations', None)
+        if observations is None:
+            self._camera_observations = observations = {}
+        if len(observations) >= 64:
+            observations.pop(next(iter(observations)))
+        observations.setdefault(device.did, {})
+        for field in ('vendor_id', 'protocol', 'authorization_fields_present', 'cloud_code', 'http_status'):
+            observations[device.did].pop(field, None)
+        record = observations[device.did].update
+        return build_camera_source(device.did, device.model,
+            lambda uri, data: self._camera_cloud_request(uri, data, diagnostic=record), diagnostic=record)
 
-    def _camera_cloud_request(self, uri: str, data: dict) -> dict:
+    def record_device_observation(self, did, observation):
+        from .diagnostics import safe_observation
+        if not hasattr(self, '_camera_observations'):
+            self._camera_observations = {}
+        if did not in self._camera_observations and len(self._camera_observations) >= 64:
+            self._camera_observations.pop(next(iter(self._camera_observations)))
+        self._camera_observations.setdefault(did, {}).update(safe_observation(observation))
+
+    def device_diagnostic_report(self, device, observation=None):
+        """User-triggered metadata sample. Public specs only; no read/write/action RPC."""
+        from .diagnostics import build_report, fetch_public_spec, region_from_url
+        spec_type = getattr(device, 'spec_type', '')
+        raw, status = None, 'offline_or_not_authorized'
+        if device.online and not getattr(self, '_control_block_reason', ''):
+            raw, status = fetch_public_spec(spec_type)
+        cached = getattr(self, '_spec_cache', {}).get(spec_type)
+        observed = dict(getattr(self, '_camera_observations', {}).get(device.did, {}))
+        observed.update(observation or {})
+        return build_report(device, spec=raw, cached_spec=cached, spec_status=status,
+            region=region_from_url(getattr(self._api, 'api_base_url', '')), observation=observed)
+
+    def _camera_cloud_request(self, uri: str, data: dict, diagnostic=lambda **_: None) -> dict:
         """Bounded read-only RPC. Never log the fresh video keys or signed URL."""
         self._require_control_access()
         from .camera_preview import CameraPreviewError
@@ -285,18 +318,21 @@ class MijiaService:
             params = generate_enc_params(uri, "POST", get_signed_nonce(security, nonce), nonce,
                                          {"data": json.dumps(data, separators=(",", ":"))}, security)
             ret = self._api.session.post(self._api.api_base_url + uri, data=params, timeout=(3, 8))
+            diagnostic(http_status=ret.status_code)
             ret.raise_for_status()
             try:
                 payload = json.loads(ret.text)
             except json.JSONDecodeError:
                 payload = json.loads(decrypt(security, nonce, ret.text))
             if payload.get("code", 0) != 0 or not isinstance(payload.get("result"), dict):
-                raise CameraPreviewError("米家暂未授权摄像头视频连接，请确认账号权限和摄像头状态后重试。")
+                diagnostic(cloud_code=payload.get('code'))
+                raise CameraPreviewError("米家暂未授权摄像头视频连接，请确认账号权限和摄像头状态后重试。", code='CLOUD_REJECTED')
+            diagnostic(cloud_code=payload.get('code', 0))
             return payload["result"]
         except CameraPreviewError:
             raise
         except Exception:
-            raise CameraPreviewError("摄像头视频授权请求失败，请检查网络后重试。") from None
+            raise CameraPreviewError("摄像头视频授权请求失败，请检查网络后重试。", code='REQUEST_FAILED') from None
 
     def device_detail(self, did: str) -> DeviceDetail:
         dev = self._get_device(did)

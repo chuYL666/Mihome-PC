@@ -168,6 +168,39 @@ class CameraPanelTest(unittest.TestCase):
         function, success, failure = self.jobs.pending.pop(0)
         success(function())
 
+    def test_unknown_power_does_not_block_video_or_poll_retry_failures(self):
+        self.service.power_state.return_value = None
+        self.panel.load()
+        self.finish_job()
+        self.assertTrue(self.panel._power.isHidden())
+        self.assertEqual(len(self.jobs.pending), 1)  # video auth, not another power read
+        self.finish_job()
+        QTest.qWait(30)
+        self.service.prepare_camera_source.assert_called_once()
+        self.panel._player.play.assert_called_once()
+        self.panel._on_failed(self.panel._generation, CameraPreviewError('test auth failure'))
+        self.panel._refresh_power()
+        self.finish_job()
+        self.assertEqual(self.jobs.pending, [])  # polling must not restart failed video
+        self.assertEqual(self.panel._status.text(), 'test auth failure')
+        self.panel._retry()
+        self.assertEqual(len(self.jobs.pending), 1)
+        self.service.set_power_state.assert_not_called()
+
+    def test_failed_power_read_allows_auth_but_hidden_or_offline_camera_does_not(self):
+        self.panel.load()
+        _, _, failure = self.jobs.pending.pop(0)
+        failure(RuntimeError('power unavailable'))
+        self.assertEqual(len(self.jobs.pending), 1)
+        self.assertTrue(self.panel._power.isHidden())
+        self.panel.hide()
+        self.jobs.pending.clear()
+        self.panel._continue_without_power_state()
+        self.assertEqual(self.jobs.pending, [])
+        self.device.online = False
+        self.panel._retry()
+        self.assertEqual(self.jobs.pending, [])
+
     def test_sleeping_camera_never_starts_video_until_woken(self):
         self.panel.load()
         self.finish_job()

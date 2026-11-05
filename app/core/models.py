@@ -28,6 +28,7 @@ class DeviceInfo:
     switch_channels: list[str] = field(default_factory=list)
     light_features: list[str] = field(default_factory=list)
     metric_features: list[str] | None = None  # None=unverified; []=no supported readout
+    firmware: str = ''  # Optional list metadata; never probe device properties for diagnostics.
 
 
 @dataclass

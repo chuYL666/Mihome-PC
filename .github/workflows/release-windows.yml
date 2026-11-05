@@ -7,7 +7,7 @@ on:
       release_tag:
         description: Release tag matching the source version (created after checks pass)
         required: true
-        default: v1.1.0
+        default: v1.1.1
         type: string
 
 permissions:
@@ -46,7 +46,7 @@ jobs:
           tests.camera_drag_test tests.camera_preview_test tests.camera_window_test
           tests.footer_account_test tests.grid_width_test tests.room_tabs_test
           tests.theme_color_test tests.tray_position_test tests.tray_room_filter_test
-          tests.tray_settings_test tests.voice_layout_test tests.window_frame_test
+          tests.tray_settings_test tests.voice_layout_test tests.window_frame_test tests.diagnostics_test
       - name: Build portable ZIP and collect licenses
         run: python tools/build_portable.py --with-camera
       - name: Validate relocated executable without Python on PATH

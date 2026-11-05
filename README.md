@@ -97,7 +97,13 @@ MijiaDeck 是开源免费的第三方米家 Windows 桌面客户端，为希望�
 
 ## 下载和使用 / Download & use
 
-**v1.1.0**提供 **Windows x64 绿色免安装 ZIP**，包含实验性摄像头组件。[前往 Releases 下载](https://github.com/Songmanual/MijiaDeck/releases)。请选择 `MijiaDeck-v1.1.0-windows-x64.zip`；GitHub 自动提供的 `Source code` 是源码，不是可直接运行的软件。此前的 v1.0.0 不含摄像头传输组件。
+**v1.1.1**提供 **Windows x64 绿色免安装 ZIP**，包含实验性摄像头组件。[前往 Releases 下载](https://github.com/Songmanual/MijiaDeck/releases)。请选择 `MijiaDeck-v1.1.1-windows-x64.zip`；GitHub 自动提供的 `Source code` 是源码，不是可直接运行的软件。此前的 v1.0.0 不含摄像头传输组件。
+
+### 设备兼容性反馈
+
+遇到摄像头无法播放、设备控制异常，或希望支持新的设备功能时，可从主界面右上角菜单打开“设备诊断报告”，选择对应设备并复制报告到 [GitHub Issues](https://github.com/Songmanual/MijiaDeck/issues)。摄像头和灯光控制页也提供入口。请同时补充期望功能、操作步骤、实际现象和米家 APP 中是否正常。
+
+报告包含型号、可获得的固件版本、设备声明的属性／动作／事件，以及本次摄像头连接中实际观察到的阶段和错误信息；不会上传账号凭证、密钥、设备名称、家庭房间或画面。能力定义与实机验证分开记录，用于逐步排查问题、完善不同型号和使用场景的支持。[诊断报告说明](docs/DEVICE-DIAGNOSTICS.md)
 
 1. 下载并解压完整压缩包。
 2. 运行目录中的 `MijiaDeck.exe`，无需安装 Python。

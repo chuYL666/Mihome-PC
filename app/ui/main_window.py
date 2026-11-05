@@ -262,6 +262,7 @@ class MainWindow(QMainWindow):
         self._more_menu = QMenu(self)
         self._more_menu.addAction("编辑卡片").triggered.connect(self.show_tray_manager)
         self._more_menu.addAction("设置").triggered.connect(self.show_settings)
+        self._more_menu.addAction("设备诊断报告").triggered.connect(self.show_device_diagnostics)
         self._more_menu.addSeparator()
         self._more_menu.addAction("关于").triggered.connect(self.show_about)
         self._refresh_btn = QPushButton()
@@ -1859,6 +1860,10 @@ class MainWindow(QMainWindow):
         if '.camera.' in device.model:
             self._open_camera_window(device)
             return
+
+    def show_device_diagnostics(self):
+        from app.ui.diagnostic_dialog import show_device_diagnostics
+        show_device_diagnostics(self, self._service, self._jobs, self._all_devices)
 
     def _open_light_window(self, device, *, from_tray=False):
         from app.ui.light_controls import LightControlDialog

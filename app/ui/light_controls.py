@@ -62,6 +62,9 @@ class LightControlDialog(QDialog):
         self._title.setFont(QFont('Microsoft YaHei UI', 12, QFont.DemiBold))
         self._title.setWordWrap(True)
         head.addWidget(self._title, 1)
+        diagnostic = QPushButton('诊断报告')
+        diagnostic.clicked.connect(self._show_diagnostics)
+        head.addWidget(diagnostic)
         close = QPushButton('✕')
         close.setFixedSize(28, 28)
         close.setAccessibleName('关闭灯光控制')
@@ -82,6 +85,10 @@ class LightControlDialog(QDialog):
         self._poll.timeout.connect(self.refresh)
         self.setFixedWidth(360)
         self.retheme()
+
+    def _show_diagnostics(self):
+        from app.ui.diagnostic_dialog import show_device_diagnostics
+        show_device_diagnostics(self, self._service, self._jobs, [self.device])
 
     def _alive(self):
         return shiboken6.isValid(self) and not self._closed
