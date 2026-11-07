@@ -11,6 +11,7 @@
 import re
 import threading
 from dataclasses import dataclass
+from urllib.parse import quote, unquote, urlparse
 
 import requests
 from PySide6.QtCore import QObject, Signal
@@ -28,29 +29,44 @@ class ReleaseInfo:
 
 
 def fetch_latest_release() -> ReleaseInfo:
-    """拉取仓库最新 release；网络失败/响应异常都抛异常由调用方处理。"""
+    """Prefer the API; fall back to the public latest-release redirect."""
     from app import __version__
     if not LATEST_API:
         raise RuntimeError("暂未开放更新检查")
 
-    resp = requests.get(
-        LATEST_API,
-        timeout=(5, 8),
-        headers={
-            "User-Agent": f"{APP_NAME}/{__version__}",
-            "Accept": "application/vnd.github+json",
-        },
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    tag = str(data.get("tag_name") or "").strip()
-    if not tag:
-        raise RuntimeError("最新版本信息缺少版本号")
-    return ReleaseInfo(
-        tag=tag,
-        url=str(data.get("html_url") or RELEASES_PAGE),
-        name=str(data.get("name") or tag),
-    )
+    headers = {"User-Agent": f"{APP_NAME}/{__version__}"}
+    try:
+        with requests.get(LATEST_API, timeout=(5, 8),
+                          headers={**headers, "Accept": "application/vnd.github+json"}) as resp:
+            resp.raise_for_status()
+            data = resp.json()
+            tag = str(data.get("tag_name") or "").strip()
+            if not tag:
+                raise ValueError("Missing release tag")
+            return ReleaseInfo(tag=tag, url=str(data.get("html_url") or RELEASES_PAGE),
+                               name=str(data.get("name") or tag))
+    except (requests.RequestException, ValueError, TypeError, AttributeError):
+        # Shared public IPs can exhaust the anonymous API quota. Do not retry
+        # that endpoint: the normal releases/latest page redirects to the
+        # actual published tag without requiring an API token or HTML parsing.
+        pass
+    try:
+        with requests.get(RELEASES_PAGE, timeout=(5, 8), stream=True,
+                          headers={**headers, "Accept": "text/html"}) as resp:
+            resp.raise_for_status()
+            address = urlparse(resp.url)
+            prefix = f"/{UPDATE_REPOSITORY}/releases/tag/"
+            path = unquote(address.path)
+            if (address.scheme != 'https' or address.netloc.lower() != 'github.com'
+                    or not path.lower().startswith(prefix.lower())):
+                raise ValueError("Unexpected release destination")
+            tag = path[len(prefix):]
+            if not re.fullmatch(r'[vV]?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?', tag):
+                raise ValueError("Invalid release tag")
+            return ReleaseInfo(tag=tag,
+                url=f'https://github.com{prefix}{quote(tag, safe="")}', name=f'{APP_NAME} {tag}')
+    except (requests.RequestException, ValueError, TypeError, AttributeError):
+        raise RuntimeError('暂时无法连接更新服务，请稍后重试，或前往 GitHub 发布页查看。') from None
 
 
 def _version_parts(value: str) -> tuple[int, ...]:
