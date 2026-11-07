@@ -124,7 +124,8 @@ class CameraSession:
                         except ValueError:
                             pass
                         continue
-                    if message in {"NOTICE AUDIO_UNSUPPORTED", "NOTICE CONTROL_FAILED"}:
+                    if message in {"NOTICE AUDIO_UNSUPPORTED", "NOTICE CONTROL_FAILED",
+                                   "INFO VIDEO_CODEC H264", "INFO VIDEO_CODEC H265", "INFO GOP_BOOTSTRAP"}:
                         if not self.cancelled:
                             on_progress(message)
                         continue

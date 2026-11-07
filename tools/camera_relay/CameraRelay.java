@@ -23,6 +23,14 @@ public final class CameraRelay {
     private static final AtomicBoolean stopped = new AtomicBoolean();
     private static volatile int quality = 2;
     private static volatile boolean audio;
+    private static int videoCodec;
+
+    private static void videoInfo(MediaPacket packet) {
+        if (packet.codecId() != videoCodec) {
+            videoCodec = packet.codecId();
+            report("INFO VIDEO_CODEC " + (videoCodec == 4 ? "H264" : "H265"));
+        }
+    }
 
     private static void report(String message) {
         System.out.println(message);
@@ -120,12 +128,18 @@ public final class CameraRelay {
             if (first == null) throw new IllegalStateException();
             server = new HttpStreamServer(port, path, null);
             server.start();
+            // Seed the bounded server cache before inviting the local player.
+            // Dropping this first IDR made long-GOP cameras time out at open.
+            server.publish(first);
+            videoInfo(first);
+            report("INFO GOP_BOOTSTRAP");
             report("READY");
             phase = "STREAM";
             long lastFrame = System.nanoTime();
             while (!stopped.get()) {
                 MediaPacket packet = camera.nextMedia(Duration.ofSeconds(1));
                 if (packet != null && packet.isVideo()) {
+                    videoInfo(packet);
                     lastFrame = System.nanoTime();
                     server.publish(packet);
                 } else if (packet != null && audio && (packet.codecId() == 1027 || packet.codecId() == 1026)) {

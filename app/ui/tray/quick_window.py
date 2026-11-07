@@ -17,7 +17,6 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -34,7 +34,7 @@ import qtawesome as qta
 from app.core import settings_store, tray_store
 from app.core.jobs import JobExecutor
 from app.core.models import DeviceInfo, SceneInfo, is_speaker
-from app.core.device_controls import device_title, device_subtitle, has_device_details, supports_card_power, tray_eligible, is_camera as is_camera_device
+from app.core.device_controls import device_title, device_subtitle, has_device_details, supports_card_power, tray_eligible, is_camera as is_camera_device, is_light
 from app.ui.camera_play_button import CameraPlayButton
 from app.core.service import MijiaService
 from app.ui.power_button import PowerButton
@@ -73,6 +73,7 @@ class TrayQuickWindow(QDialog):
     manage_requested = Signal()
     speaker_changed = Signal()
     open_device_requested = Signal(str)  # did
+    remove_tray_item_requested = Signal(str, str)  # kind, id
 
     def __init__(self, service: MijiaService, jobs: JobExecutor, parent=None):
         super().__init__(parent)
@@ -85,6 +86,7 @@ class TrayQuickWindow(QDialog):
         self._sub_labels: dict[str, QLabel] = {}
         self._sub_widths: dict[str, int] = {}
         self._columns: int = settings_store.get_tray_columns()
+        self._light_control = None
 
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
@@ -226,11 +228,9 @@ class TrayQuickWindow(QDialog):
         self._panel.setObjectName("trayUnifiedPanel")
         self._panel.setStyleSheet(
             f"QFrame#trayUnifiedPanel {{ background: {SiColors.CARD}; border: 1px solid {SiColors.LINE}; border-radius: 6px; }}")
-        self._panel_shadow = QGraphicsDropShadowEffect(self._panel)
-        self._panel_shadow.setBlurRadius(10)
-        self._panel_shadow.setOffset(0, 0)
-        self._panel_shadow.setColor(QColor(0, 0, 0, 45))
-        self._panel.setGraphicsEffect(self._panel_shadow)
+        # Paint the window shadow ourselves. A graphics effect on this whole
+        # live subtree caches its children and can retain the light scrim when
+        # pages switch in a Windows translucent tool window.
         self._separator = QFrame()
         self._separator.setFixedHeight(1)
         self._separator.setStyleSheet("background: transparent; border: none;")
@@ -240,7 +240,12 @@ class TrayQuickWindow(QDialog):
         divider_row.addStretch(3)
         divider_row.addWidget(self._separator, 14)
         divider_row.addStretch(3)
-        self._outer_lay = QVBoxLayout(self._panel)
+        self._overview_page = QWidget(self._panel)
+        self._overview_page.setAttribute(Qt.WA_TranslucentBackground)
+        self._page_stack = QStackedLayout(self._panel)
+        self._page_stack.setContentsMargins(0, 0, 0, 0)
+        self._page_stack.addWidget(self._overview_page)
+        self._outer_lay = QVBoxLayout(self._overview_page)
         self._outer_lay.setContentsMargins(0, 0, 0, 0)
         self._outer_lay.setSpacing(0)
         self._outer_lay.addWidget(self._audio_bar)
@@ -290,6 +295,24 @@ class TrayQuickWindow(QDialog):
         handle.setAccessibleName('拖动调整浮窗位置')
         return handle
 
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        # Clear the layered window backing store, including transparent gaps.
+        # Child-only updates are insufficient when returning from the scrim.
+        painter.setCompositionMode(QPainter.CompositionMode_Source)
+        painter.fillRect(self.rect(), Qt.transparent)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        panel = QRectF(self._panel.geometry())
+        for spread in range(_SHADOW_PAD, 0, -1):
+            painter.setBrush(QColor(0, 0, 0, 2 + _SHADOW_PAD - spread))
+            painter.drawRoundedRect(panel.adjusted(-spread, -spread, spread, spread),
+                                    6 + spread, 6 + spread)
+        painter.setBrush(QColor(SiColors.CARD))
+        painter.drawRoundedRect(panel, 6, 6)
+        painter.end()
+
     def is_explicitly_visible(self) -> bool:
         """显式呼出状态（Tool 窗口失焦时 isVisible 会误报 False）。"""
         return self._tray_visible
@@ -312,6 +335,9 @@ class TrayQuickWindow(QDialog):
     def set_devices(self, devices: list[DeviceInfo], known_power: dict[str, bool | None]) -> None:
         """由主窗口在设备列表刷新后调用，传入全量设备与开关记忆。"""
         self._devices = [d for d in devices if tray_eligible(d)]
+        if self._light_control is not None and not any(
+                d.did == self._light_control.device.did and d.online for d in self._devices):
+            self._light_control.reject()
         self._known_power = dict(known_power)
         self._tray_dids = tray_store.load()
         self._tray_scenes = tray_store.load_scenes()
@@ -324,6 +350,8 @@ class TrayQuickWindow(QDialog):
 
     def set_access_state(self, state):
         self._access_state = state
+        if state != 'ready' and self._light_control is not None:
+            self._light_control.reject()
         self._drag_header.setVisible(state == 'ready')
         self._update_audio_bar()
         self._update_voice_bar()
@@ -429,6 +457,8 @@ class TrayQuickWindow(QDialog):
         self.speaker_changed.emit()
 
     def _sync_tray_height(self) -> None:
+        if self._light_control is not None:
+            return
         # 确定性计算窗口高度，不依赖 adjustSize（隐藏态会漏算语音条/音频栏）：
         # 由各固定子控件高度累加，显隐结果一致，呼出前即可得到正确尺寸避免闪烁；
         # 已显示时外扩并保持底部贴边，避免语音/音频栏显隐挤压卡片
@@ -501,7 +531,10 @@ class TrayQuickWindow(QDialog):
             self._audio_drag_handle.move(self._audio_bar.width() - 27, 11)
         drag_surface = obj in getattr(self, '_drag_surfaces', (
             getattr(self, '_drag_header', None), getattr(self, '_drag_title', None)))
-        if obj in (self, getattr(self, '_panel', None), getattr(self, '_audio_bar', None)) and event.type() in (
+        if self._light_control is not None:
+            drag_surface = obj in (self._light_control._header, self._light_control._title,
+                                   self._light_control._power_text)
+        if self._light_control is None and obj in (self, getattr(self, '_panel', None), getattr(self, '_audio_bar', None)) and event.type() in (
                 QEvent.MouseButtonPress, QEvent.MouseMove, QEvent.MouseButtonRelease):
             header = (self._audio_bar._drag_header if not self._audio_bar.isHidden() else self._drag_header)
             bottom = header.mapTo(self, QPoint(0, header.height())).y()
@@ -584,6 +617,8 @@ class TrayQuickWindow(QDialog):
     def _hide_after_pointer_leave(self) -> None:
         from PySide6.QtGui import QCursor
         from PySide6.QtWidgets import QApplication
+        if self._light_control is not None:
+            return  # Adjusting a light stays open until Return or outside activation.
         if not self.isVisible() or self._dragging or self.frameGeometry().contains(QCursor.pos()):
             return
         if QApplication.activePopupWidget() is not None:
@@ -600,6 +635,8 @@ class TrayQuickWindow(QDialog):
         QTimer.singleShot(120, self._install_outside_filter)
 
     def hideEvent(self, event) -> None:  # noqa: N802
+        if self._light_control is not None:
+            self._light_control.reject()
         self._tray_visible = False
         self._drag_start_global = self._drag_start_pos = None
         self._dragging = False
@@ -608,6 +645,48 @@ class TrayQuickWindow(QDialog):
         self._typewriter.stop()
         self._remove_outside_filter()
         super().hideEvent(event)
+
+    def show_light_controls(self, device):
+        from app.core.device_controls import is_light
+        if self._access_state != 'ready' or not device.online or not is_light(device) or not has_device_details(device):
+            return
+        if self._light_control is not None:
+            self._light_control.reject()
+        from app.ui.light_controls import LightControlDialog
+        backdrop = self._overview_page.grab()
+        pane = LightControlDialog(self._service, self._jobs, device, self._panel, embedded=True)
+        pane.set_backdrop(backdrop)
+        self._light_control = pane
+        self._page_stack.addWidget(pane)
+        self._overview_page.setEnabled(False)
+        self._overview_page.setUpdatesEnabled(False)
+        self._page_stack.setCurrentWidget(pane)
+        self._overview_page.hide()
+        # Keep the live page out of the translucent native window altogether.
+        # Background polling can rebuild rows while the editor is open; none
+        # of those widgets may contribute to this window's backing store.
+        self._page_stack.removeWidget(self._overview_page)
+        self._overview_page.setParent(None)
+        pane.raise_()
+        self._panel.update()
+        for surface in (pane._header, pane._title, pane._power_text):
+            surface.installEventFilter(self)
+        pane.power_changed.connect(lambda state: self._apply_power({device.did: state}))
+        def finished(_):
+            if self._light_control is pane:
+                self._light_control = None
+                self._page_stack.insertWidget(0, self._overview_page)
+                self._page_stack.setCurrentWidget(self._overview_page)
+                self._overview_page.setUpdatesEnabled(True)
+                self._overview_page.setEnabled(True)
+                self._page_stack.removeWidget(pane)
+                pane.deleteLater()
+                self._panel.update()
+                self.update()  # Invalidate the complete native surface as well.
+        pane.finished.connect(finished)
+        self._leave_timer.stop()
+        pane._close_button.setFocus()
+        pane.load()
 
     def _install_outside_filter(self) -> None:
         import shiboken6
@@ -807,7 +886,8 @@ class TrayQuickWindow(QDialog):
         avail = self._card_text_width(known is not None or is_camera)
 
         text_col = QVBoxLayout()
-        if is_camera:
+        adjustable_light = is_light(dev) and has_device_details(dev)
+        if is_camera or adjustable_light:
             text_col.setContentsMargins(0, 8, 0, 0)
         text_col.setSpacing(2)
         name = QLabel()
@@ -847,6 +927,7 @@ class TrayQuickWindow(QDialog):
             btn.clicked.connect(_on_toggle)
             lay.addWidget(btn)
         row._did = dev.did  # type: ignore[attr-defined]
+        self._attach_remove_menu(row, 'device', dev.did)
         row._power_btn = btn  # type: ignore[attr-defined]
         row._play_btn = None
         if is_camera:
@@ -855,6 +936,10 @@ class TrayQuickWindow(QDialog):
             lay.addWidget(row._play_btn)
             from app.ui.tray.camera_corner_tag import CameraCornerTag
             tag = CameraCornerTag(row)
+            tag.raise_()
+        elif adjustable_light:
+            from app.ui.light_corner_tag import LightCornerTag
+            tag = LightCornerTag(row, corner_radius=9, width=28, height=12, font_size=5.5)
             tag.raise_()
 
         if has_device_details(dev) and dev.online:
@@ -917,7 +1002,29 @@ class TrayQuickWindow(QDialog):
         btn.clicked.connect(lambda _, s=scene, b=btn: self._run_scene(s, b))
         lay.addWidget(btn)
         row._scene_id = scene.scene_id  # type: ignore[attr-defined]
+        self._attach_remove_menu(row, 'scene', scene.scene_id)
         return row
+
+    def _build_remove_tray_menu(self, kind, item_id):
+        from app.ui.popup_menu import style_popup_menu
+        menu = QMenu(self)
+        style_popup_menu(menu)
+        action = menu.addAction('从托盘窗口移除')
+        action.triggered.connect(lambda _: self.remove_tray_item_requested.emit(kind, item_id))
+        return menu
+
+    def _attach_remove_menu(self, row, kind, item_id):
+        row.setContextMenuPolicy(Qt.CustomContextMenu)
+        row.customContextMenuRequested.connect(lambda point: self._show_remove_tray_menu(
+            kind, item_id, row.mapToGlobal(point)))
+
+    def _show_remove_tray_menu(self, kind, item_id, point):
+        self._leave_timer.stop()
+        menu = self._build_remove_tray_menu(kind, item_id)
+        menu.exec(point)
+        menu.deleteLater()
+        if not self.underMouse():
+            self._leave_timer.start()
 
     def _apply_scene_btn(self, btn: QPushButton, busy: bool) -> None:
         btn.setEnabled(not busy)

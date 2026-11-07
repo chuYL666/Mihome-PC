@@ -159,6 +159,7 @@ def main():
         'packager': 'PyInstaller ' + PyInstaller.__version__, 'dependencies': versions,
         'camera_backend_included': with_camera,
         'camera_source_commit': '2cc9d9e7607014d1d05c17bc5676544fbb0d5d24' if with_camera else None,
+        'camera_local_patch': 'gop-bootstrap-v1' if with_camera else None,
         'camera_upstream_license': 'not confirmed' if with_camera else None,
         'source_commit': os.environ.get('MIJIADECK_SOURCE_COMMIT') or subprocess.check_output(
             ['git', '-c', 'safe.directory=' + ROOT.as_posix(), 'rev-parse', 'HEAD'],

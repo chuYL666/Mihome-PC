@@ -33,6 +33,18 @@ class TrayActivationTest(unittest.TestCase):
             controller._on_activated(reason)
             quick.show_near_tray.assert_called_once()
 
+    def test_adjustable_light_opens_inside_tray_without_hiding_it(self):
+        from app.core.models import DeviceInfo
+        controller, quick = self.controller()
+        device = DeviceInfo('light', '灯泡', 'test.light.color', '', '', True,
+                            light_features=['brightness', 'temperature'])
+        controller._main = Mock()
+        controller._main.devices.return_value = [device]
+        controller._on_open_device(device.did)
+        quick.show_light_controls.assert_called_once_with(device)
+        quick.hide.assert_not_called()
+        controller._main._open_light_window.assert_not_called()
+
     def test_tray_uses_native_tooltip_without_hover_popup(self):
         window = QWidget()
         with patch.object(TrayController, '_create_quick_window'), \

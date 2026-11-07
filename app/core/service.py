@@ -281,7 +281,8 @@ class MijiaService:
         if len(observations) >= 64:
             observations.pop(next(iter(observations)))
         observations.setdefault(device.did, {})
-        for field in ('vendor_id', 'protocol', 'authorization_fields_present', 'cloud_code', 'http_status'):
+        for field in ('vendor_id', 'protocol', 'authorization_fields_present', 'cloud_code', 'http_status',
+                      'video_codec', 'gop_bootstrap', 'player_error', 'width', 'height'):
             observations[device.did].pop(field, None)
         record = observations[device.did].update
         return build_camera_source(device.did, device.model,

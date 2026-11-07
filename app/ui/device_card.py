@@ -12,7 +12,7 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QLabel,
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from app.siui.components.container import SiRowCard
 
 from app.core.models import DeviceInfo
-from app.core.device_controls import device_title, device_subtitle, has_device_details, supports_card_power, is_camera
+from app.core.device_controls import device_title, device_subtitle, has_device_details, supports_card_power, is_camera, is_light, tray_eligible
 from app.ui.camera_play_button import CameraPlayButton
 from app.ui.power_button import PowerButton
 from app.ui.si_theme import SiColors
@@ -42,6 +42,7 @@ _CARD_FIXED_HEIGHT = 92
 class DeviceCard(SiRowCard):
     power_clicked = Signal(str)  # did
     open_requested = Signal(str)  # did
+    tray_menu_requested = Signal(str, QPoint)
 
     def __init__(self, device: DeviceInfo, parent=None):
         super().__init__(parent, self.LeftToRight)
@@ -134,6 +135,10 @@ class DeviceCard(SiRowCard):
             from app.ui.tray.camera_corner_tag import CameraCornerTag
             self._camera_tag = CameraCornerTag(self, corner_radius=14, width=46, height=14, font_size=6)
             self._camera_tag.raise_()
+        elif is_light(device) and has_device_details(device):
+            from app.ui.light_corner_tag import LightCornerTag
+            self._light_tag = LightCornerTag(self)
+            self._light_tag.raise_()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         """A fine outline keeps the cards legible on the quiet page background."""
@@ -211,6 +216,13 @@ class DeviceCard(SiRowCard):
         self.update()
 
     # ---------- 交互 ----------
+
+    def contextMenuEvent(self, event):
+        if tray_eligible(self.device):
+            self.tray_menu_requested.emit(self.device.did, event.globalPos())
+            event.accept()
+        else:
+            event.ignore()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt 命名约定)
         # 电源钮自己消费点击事件，能走到这里的都是卡片空白区

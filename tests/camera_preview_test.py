@@ -164,6 +164,29 @@ class CameraPanelTest(unittest.TestCase):
         self.panel._on_progress(generation, "PHASE MEDIA")
         self.assertIn("公网中继", self.panel._status.text())
 
+    def test_player_errors_keep_the_real_category_without_leaking_backend_text(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        from app.core.diagnostics import build_report
+        for error, code in [(QMediaPlayer.Error.ResourceError, 'PLAYER_RESOURCE'),
+                            (QMediaPlayer.Error.FormatError, 'PLAYER_FORMAT'),
+                            (QMediaPlayer.Error.NetworkError, 'PLAYER_NETWORK'),
+                            (QMediaPlayer.Error.AccessDeniedError, 'PLAYER_ACCESS')]:
+            self.panel._session = self.backend
+            self.panel._on_player_error(error, 'SECRET-MEDIA-URL')
+            self.assertEqual(self.panel._diagnostic['error_code'], code)
+            self.assertNotIn('SECRET', self.panel._status.text())
+            self.assertNotIn('SECRET', build_report(self.device, observation=self.panel._diagnostic_snapshot()))
+
+    def test_codec_and_bootstrap_info_are_recorded_only_for_current_connection(self):
+        self.panel.start()
+        generation = self.panel._generation
+        self.panel._on_progress(generation, 'INFO VIDEO_CODEC H265')
+        self.panel._on_progress(generation, 'INFO GOP_BOOTSTRAP')
+        self.assertEqual(self.panel._diagnostic['video_codec'], 'H265')
+        self.assertTrue(self.panel._diagnostic['gop_bootstrap'])
+        self.panel._on_progress(generation - 1, 'INFO VIDEO_CODEC H264')
+        self.assertEqual(self.panel._diagnostic['video_codec'], 'H265')
+
     def finish_job(self):
         function, success, failure = self.jobs.pending.pop(0)
         success(function())

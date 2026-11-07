@@ -1131,6 +1131,42 @@ class MainWindow(QMainWindow):
             self._update_tray_devices()
             Toast.info(self, "托盘项目已更新", 2000)
 
+    def _build_device_tray_menu(self, did):
+        from app.core import tray_store
+        from app.core.device_controls import tray_eligible
+        device = next((d for d in self._all_devices if d.did == did), None)
+        if device is None or not tray_eligible(device):
+            return None
+        menu = QMenu(self)
+        self._style_popup_menu(menu)
+        selected = tray_store.contains(did)
+        action = menu.addAction('从托盘窗口移除' if selected else '添加到托盘窗口')
+        action.triggered.connect(lambda _: self._set_device_tray_membership(did, not selected))
+        return menu
+
+    def _show_device_tray_menu(self, did, position):
+        menu = self._build_device_tray_menu(did)
+        if menu is not None:
+            menu.exec(position)
+            menu.deleteLater()
+
+    def _set_device_tray_membership(self, did, selected):
+        from app.core import tray_store
+        from app.core.device_controls import tray_eligible
+        device = next((d for d in self._all_devices if d.did == did), None)
+        if device is None or not tray_eligible(device):
+            return
+        tray_store.set_device_selected(did, selected)
+        self._update_tray_devices()
+        Toast.info(self, '已添加到托盘窗口' if selected else '已从托盘窗口移除', 1600)
+
+    def _remove_tray_item(self, kind, item_id):
+        from app.core import tray_store
+        if kind not in ('device', 'scene'):
+            return
+        tray_store.remove_item(kind, item_id)
+        self._update_tray_devices()
+
     def show_about(self) -> None:
         """打开关于对话框（即用即建）。"""
         from app.ui.about_dialog import AboutDialog
@@ -1604,6 +1640,7 @@ class MainWindow(QMainWindow):
                 card.set_icon(path)
             card.power_clicked.connect(self._on_power_clicked)
             card.open_requested.connect(self._on_open_device)
+            card.tray_menu_requested.connect(self._show_device_tray_menu)
             self._cards[device.did] = card
             self._grid.addWidget(card, index // cols, index % cols)
         self._finalize_grid(cols, rows)
@@ -1865,7 +1902,7 @@ class MainWindow(QMainWindow):
         from app.ui.diagnostic_dialog import show_device_diagnostics
         show_device_diagnostics(self, self._service, self._jobs, self._all_devices)
 
-    def _open_light_window(self, device, *, from_tray=False):
+    def _open_light_window(self, device):
         from app.ui.light_controls import LightControlDialog
         if not has_device_details(device) or self._access_state() != 'ready':
             return
@@ -1877,8 +1914,7 @@ class MainWindow(QMainWindow):
             current.raise_()
             current.activateWindow()
             return
-        dialog = LightControlDialog(self._service, self._jobs, device,
-                                    None if from_tray else self)
+        dialog = LightControlDialog(self._service, self._jobs, device, self)
         self._light_windows[device.did] = dialog
         dialog.power_changed.connect(lambda state: (
             self._apply_power_state(device.did, state), self._update_tray_devices()))
@@ -1887,9 +1923,7 @@ class MainWindow(QMainWindow):
             self._refresh_closed_detail(device.did)
             dialog.deleteLater()
         dialog.finished.connect(closed)
-        card = self._cards.get(device.did)
-        anchor = card.mapToGlobal(card.rect().bottomLeft()) if card is not None and self.isVisible() and not from_tray else None
-        dialog.show_near(anchor)
+        dialog.show_centered()
         dialog.load()
 
     def _open_camera_window(self, device):

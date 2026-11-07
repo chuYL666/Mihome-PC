@@ -103,12 +103,13 @@ STAGES = {'idle', 'power', 'authorization', 'relay', 'session_auth', 'media', 'd
 CODES = {'NONE', 'NOT_ATTEMPTED', 'UNKNOWN', 'VENDOR_UNSUPPORTED', 'AUTH_FIELDS', 'AUTH_KEY', 'CLOUD_REJECTED',
          'HTTP_ERROR', 'REQUEST_FAILED', 'CONFIG', 'RELAY', 'AUTH', 'MEDIA', 'STREAM',
          'HELPER_EXIT', 'TIMEOUT', 'DECODE', 'CANCELLED', 'OFFLINE', 'POWER_UNKNOWN',
-         'POWER_READ_FAILED', 'AUDIO_UNSUPPORTED', 'CONTROL_FAILED'}
+         'POWER_READ_FAILED', 'AUDIO_UNSUPPORTED', 'CONTROL_FAILED',
+         'PLAYER_RESOURCE', 'PLAYER_FORMAT', 'PLAYER_NETWORK', 'PLAYER_ACCESS'}
 
 
 def safe_observation(raw):
     raw = raw if isinstance(raw, dict) else {}
-    result = {k: raw[k] for k in ('attempted', 'power_readable', 'video_received') if type(raw.get(k)) is bool}
+    result = {k: raw[k] for k in ('attempted', 'power_readable', 'video_received', 'gop_bootstrap') if type(raw.get(k)) is bool}
     for key in ('vendor_id', 'http_status', 'cloud_code', 'width', 'height', 'player_error'):
         if (n := number(raw.get(key))) is not None:
             result[key] = n
@@ -116,6 +117,8 @@ def safe_observation(raw):
     result['error_code'] = raw.get('error_code') if isinstance(raw.get('error_code'), str) and raw['error_code'] in CODES else 'UNKNOWN' if raw.get('attempted') else 'NOT_ATTEMPTED'
     if raw.get('protocol') in ('CS2', 'unrecognized'):
         result['protocol'] = raw['protocol']
+    if raw.get('video_codec') in ('H264', 'H265'):
+        result['video_codec'] = raw['video_codec']
     if isinstance(raw.get('authorization_fields_present'), dict):
         result['authorization_fields_present'] = {k: raw['authorization_fields_present'][k]
             for k in ('p2p_id', 'init_string', 'public_key', 'sign')

@@ -137,3 +137,32 @@ def remove(did: str) -> None:
 
 def contains(did: str) -> bool:
     return str(did) in load()
+
+
+def set_device_selected(did: str, selected: bool) -> None:
+    """Commit device membership and mixed ordering together, preserving scenes."""
+    did = str(did)
+    raw = _read_raw()
+    devices = list(dict.fromkeys(raw.get('devices', [])))
+    order = load_order()
+    if selected:
+        if did not in devices:
+            devices.append(did)
+        if not any(item['type'] == 'device' and item['id'] == did for item in order):
+            order.append({'type': 'device', 'id': did})
+    else:
+        devices = [item for item in devices if item != did]
+        order = [item for item in order if not (item['type'] == 'device' and item['id'] == did)]
+    raw['devices'], raw['order'] = devices, order
+    _write_raw(raw)
+
+
+def remove_item(kind: str, item_id: str) -> None:
+    if kind == 'device':
+        set_device_selected(item_id, False)
+    elif kind == 'scene':
+        raw = _read_raw()
+        raw['scenes'] = [s for s in load_scenes() if s['scene_id'] != str(item_id)]
+        raw['order'] = [item for item in load_order()
+                        if not (item['type'] == 'scene' and item['id'] == str(item_id))]
+        _write_raw(raw)

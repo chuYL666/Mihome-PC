@@ -5,9 +5,12 @@ import io
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 COMMIT = '2cc9d9e7607014d1d05c17bc5676544fbb0d5d24'
 SOURCE_URL = 'https://codeload.github.com/eugeneRover/micam/zip/' + COMMIT
@@ -37,6 +40,8 @@ def install(jdk=None):
     with tempfile.TemporaryDirectory(prefix='mihome-camera-') as folder:
         build = Path(folder)
         source = extract(SOURCE_URL, SOURCE_HASH, build / 'source')
+        from tools.camera_relay.stream_bootstrap_patch import patch_http_stream_server
+        patch_http_stream_server(source / 'src/main/java/micam/server/HttpStreamServer.java')
         if jdk is None:
             jdk = extract(JDK_URL, JDK_HASH, build / 'jdk')
         jdk = Path(jdk)

@@ -313,6 +313,10 @@ class CameraPreviewPanel(QFrame):
             return
         if message.startswith('ERROR '):
             self._on_failed(generation, CameraPreviewError(ERRORS.get(message[6:], '远程视频连接中断，请重试。'), code=message[6:]))
+        elif message in ('INFO VIDEO_CODEC H264', 'INFO VIDEO_CODEC H265'):
+            self._record_diagnostic(self._diagnostic.get('stage', 'media'), video_codec=message.rsplit(' ', 1)[1])
+        elif message == 'INFO GOP_BOOTSTRAP':
+            self._record_diagnostic(self._diagnostic.get('stage', 'media'), gop_bootstrap=True)
         elif message == 'NOTICE AUDIO_UNSUPPORTED':
             self._record_diagnostic(self._diagnostic.get('stage', 'media'), 'AUDIO_UNSUPPORTED')
             self._muted = True
@@ -358,7 +362,14 @@ class CameraPreviewPanel(QFrame):
     def _on_player_error(self, error, _message):
         if self._session is not None and not self._switching_quality and error != QMediaPlayer.Error.NoError:
             self._diagnostic['player_error'] = error.value
-            self._on_failed(self._generation, CameraPreviewError('已连接视频流，但画面解码失败。点击画面重试。', code='DECODE'))
+            code, message = {
+                QMediaPlayer.Error.ResourceError: ('PLAYER_RESOURCE', '播放器未能读取本地视频流，请点击画面重试。'),
+                QMediaPlayer.Error.FormatError: ('PLAYER_FORMAT', '播放器无法识别当前视频格式，请点击画面重试。'),
+                QMediaPlayer.Error.NetworkError: ('PLAYER_NETWORK', '播放器连接本地视频流失败，请点击画面重试。'),
+                QMediaPlayer.Error.AccessDeniedError: ('PLAYER_ACCESS', '播放器访问视频流被拒绝，请点击画面重试。'),
+            }.get(error, ('UNKNOWN', '视频播放失败，请点击画面重试。'))
+            # Never copy Qt's arbitrary message: it may include a media URL/path.
+            self._on_failed(self._generation, CameraPreviewError(message, code=code))
 
     def _on_timeout(self):
         self._record_diagnostic(self._diagnostic.get('stage', 'idle'), 'TIMEOUT')

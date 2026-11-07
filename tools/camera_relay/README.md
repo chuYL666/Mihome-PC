@@ -12,6 +12,19 @@ Java runtime is created locally; users need no system-wide Java installation.
 The runtime preserves its legal/ notices. The source checkout and full JDK are
 only temporary build inputs. Generated binaries/runtime are excluded from Git.
 
+Local playback patch: stream_bootstrap_patch.py is applied to the verified pinned
+HttpStreamServer source before compilation. It retains one in-memory GOP up to
+16 MiB / 400 frames and replays it atomically when a local viewer connects.
+Overflow invalidates the entire cached GOP until a new keyframe arrives; partial
+GOPs are never replayed. CameraRelay seeds the first received keyframe before
+reporting READY. This prevents local viewers from waiting for the next IDR and
+timing out on long-GOP cameras. No video is written to disk.
+
+Offline reproduction: tools/test_camera_stream.py uses generated test-pattern
+H.264/H.265 streams through the actual HTTP muxer and Qt player. Compiler paths
+and the synthetic-video encoder live only under build/camera-debug. The Java
+fixture also supports --check-bootstrap to check replay and byte/frame limits.
+
 This is experimental. The transport repository has no explicit license file at
 this commit, and upstream redistribution permission has not been confirmed.
 The maintainer has elected to include a compiled relay in the v1.0.1 full build;

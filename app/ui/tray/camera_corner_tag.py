@@ -11,11 +11,15 @@ class CameraCornerTag(QWidget):
         super().__init__(parent)
         self._corner_radius = corner_radius
         self._font_size = font_size
+        self._text = 'CAMERA'
         self.setObjectName('cameraCornerTag')
         self.setFixedSize(width, height)
         self.move(0, 0)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setAccessibleName('摄像头 CAMERA')
+
+    def _background(self):
+        return QColor(SiColors.CAMERA_TAG_BG)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -24,7 +28,7 @@ class CameraCornerTag(QWidget):
         clip.addRoundedRect(QRectF(self.parentWidget().rect()), self._corner_radius, self._corner_radius)
         painter.setClipPath(clip)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(SiColors.CAMERA_TAG_BG))
+        painter.setBrush(self._background())
         tag = QPainterPath()
         tag.moveTo(0, 0)
         width, height = self.width(), self.height()
@@ -39,7 +43,7 @@ class CameraCornerTag(QWidget):
         font = QFont('Segoe UI')
         font.setPointSizeF(self._font_size)
         font.setWeight(QFont.Weight.Bold)
-        text.addText(QPointF(0, 0), font, 'CAMERA')
+        text.addText(QPointF(0, 0), font, self._text)
         # Center visible glyphs instead of the font's ascent/descent line box.
         painter.translate(-text.boundingRect().center())
         painter.fillPath(text, QColor('#ffffff'))
