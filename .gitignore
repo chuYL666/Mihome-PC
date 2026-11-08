@@ -67,3 +67,12 @@ tools/camera_relay/UPSTREAM-README.md
 htmlcov/
 .pytest_cache/
 account_profiles.json
+
+# ---- 本地定制版补充 ----
+card_order.json
+run_debug.pyw
+micam.zip
+micam_src/
+tools/camera_relay/runtime/
+*.jar.bak
+build/relay/

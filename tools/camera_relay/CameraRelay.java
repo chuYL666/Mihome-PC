@@ -23,6 +23,7 @@ public final class CameraRelay {
     private static final AtomicBoolean stopped = new AtomicBoolean();
     private static volatile int quality = 2;
     private static volatile boolean audio;
+    private static volatile int channel = 0;
     private static int videoCodec;
 
     private static void videoInfo(MediaPacket packet) {
@@ -35,6 +36,29 @@ public final class CameraRelay {
     private static void report(String message) {
         System.out.println(message);
         System.out.flush();
+    }
+
+    /** Request a video stream and surface whether the camera accepted the quality. */
+    private static void startVideo(int requested) {
+        if (camera == null) return;
+        camera.startVideo(requested, audio, channel);
+        try {
+            MissClient.Response ack = camera.awaitResponse(Duration.ofMillis(1500));
+            if (ack != null && !ack.text().contains("\"result\":\"success\""))
+                report("NOTICE QUALITY_REJECTED");
+        } catch (Exception ignored) { }
+    }
+
+    /**
+     * Restart the running stream with the current quality/audio/channel.
+     * Cameras ignore enableaudio and channel changes on an already-running
+     * stream, so every switch has to stop the stream first.
+     */
+    private static void restartVideo() {
+        if (camera == null) return;
+        try { camera.stopVideo(); } catch (Exception ignored) { }
+        try { Thread.sleep(300); } catch (InterruptedException ignored) { }
+        startVideo(quality);
     }
 
     private static String field(BufferedReader reader) throws Exception {
@@ -72,7 +96,9 @@ public final class CameraRelay {
             String devicePublic = field(input);
             String sign = field(input);
             quality = Integer.parseInt(field(input));
-            if (quality < 0 || quality > 2) throw new IllegalArgumentException();
+            if (quality < 0 || quality > 3) throw new IllegalArgumentException();
+            channel = Integer.parseInt(field(input));
+            if (channel < 0 || channel > 3) channel = 0;
             if (!path.matches("/camera-[a-f0-9]{32}\\.ts") || port < 1 || port > 65535)
                 throw new IllegalArgumentException();
             Thread cancellation = new Thread(() -> {
@@ -80,15 +106,20 @@ public final class CameraRelay {
                     String command;
                     while ((command = input.readLine()) != null && !command.equals("STOP")) {
                         try {
-                            if (command.matches("QUALITY [012]")) {
+                            if (command.matches("QUALITY [0123]")) {
                                 quality = command.charAt(8) - '0';
-                                if (camera != null) camera.startVideo(quality, audio);
+                                restartVideo();
+                            } else if (command.matches("CHANNEL [0-3]")) {
+                                channel = command.charAt(8) - '0';
+                                restartVideo();
+                                report("NOTICE CHANNEL_SET");
                             } else if (command.matches("AUDIO [01]")) {
                                 audio = command.endsWith("1");
                                 if (camera != null) {
-                                    camera.startVideo(quality, audio);
+                                    restartVideo();
                                     camera.sendEncrypted(audio ? 0x104 : 0x105, "");
                                 }
+                                report(audio ? "NOTICE AUDIO_ON" : "NOTICE AUDIO_OFF");
                             } else if (command.matches("PTZ [1234]")) {
                                 if (camera != null) camera.sendEncrypted(0x112,
                                     "{\"operation\":" + command.charAt(4) + "}");
@@ -113,7 +144,7 @@ public final class CameraRelay {
             camera = new MissClient(connection);
             camera.authenticate(clientPublic, sign, Duration.ofSeconds(15));
             camera.useSessionKey(MissCrypto.sessionKey(clientPrivate, devicePublic));
-            camera.startVideo(quality, audio);
+            startVideo(quality);
             phase = "MEDIA";
             report("PHASE MEDIA");
             long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();

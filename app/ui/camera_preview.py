@@ -35,7 +35,7 @@ class CameraPreviewPanel(QFrame):
         self._power_state = None
         self._power_deadline = 0
         self._attempted = False
-        self._quality = 1  # Fresh page always starts with the smooth stream; never persisted.
+        self._quality = 2  # 单摄像头页默认高清：360P 子码流在桌面端太糊，仍可在菜单切回流畅
         self._muted = True
         self._audio_sink = None
         self._audio_io = None
@@ -59,6 +59,22 @@ class CameraPreviewPanel(QFrame):
         self._diagnostic_button = QPushButton('诊断报告')
         self._diagnostic_button.clicked.connect(self._show_diagnostics)
         self.header.addWidget(self._diagnostic_button)
+        self._panel_btn = QPushButton('功能')
+        self._panel_btn.setCursor(Qt.PointingHandCursor)
+        self._panel_btn.setToolTip('查看这台摄像头的全部可控功能、动作与设备信息')
+        self._panel_btn.clicked.connect(self._show_device_panel)
+        self.header.addWidget(self._panel_btn)
+        self._dual_lens = getattr(device, 'model', '') == 'isa.camera.hlmax'
+        self._lens_channel = 0   # 0=主镜头（云台），1=第二路（枪机，通道模式）
+        self._lens_value = None  # 最近一次通过属性写入的镜头值
+        self._audio_seen = 0.0   # 最近一次收到 PCM 的时刻
+        self._audio_tried = 0.0  # 最近一次请求开启声音的时刻
+        if self._dual_lens:
+            self._lens_btn = QPushButton('切换镜头')
+            self._lens_btn.setCursor(Qt.PointingHandCursor)
+            self._lens_btn.setToolTip('双摄设备：切换云台/枪机镜头画面')
+            self._lens_btn.clicked.connect(self._show_lens_menu)
+            self.header.addWidget(self._lens_btn)
         self._power = PowerButton(44, 28, self)
         self._power.set_online(device.online)
         self._power.setToolTip('摄像头开关')
@@ -104,6 +120,124 @@ class CameraPreviewPanel(QFrame):
         from app.ui.diagnostic_dialog import show_device_diagnostics
         show_device_diagnostics(self, self._service, self._jobs, [self._device], self._diagnostic_snapshot)
 
+    def _show_device_panel(self):
+        """摄像头的其它功能（夜视、移动侦测、SD 卡、重启、PTZ 校准等）。"""
+        from app.ui.device_panel import DevicePanelDialog
+        if getattr(self, '_device_panel', None) is not None and shiboken6.isValid(self._device_panel):
+            self._device_panel.show()
+            self._device_panel.raise_()
+            self._device_panel.activateWindow()
+            return
+        dialog = DevicePanelDialog(self._service, self._jobs, self._device, self)
+        self._device_panel = dialog
+        dialog.finished.connect(lambda _code: setattr(self, '_device_panel', None))
+        dialog.show()
+
+    # ---- 双摄镜头切换（isa.camera.hlmax：dome 云台 + box 枪机）----
+
+    _LENS_SIID = 6        # urn:isa-spec:service:other-functions
+    _LENS_PIID = 21       # hl-camera-switch: 0全关 1仅dome 2仅box 3全开
+
+    def _show_lens_menu(self):
+        menu = QMenu(self)
+        style_popup_menu(menu)
+        actions = {}
+        # (属性值, 通道, 说明)：hlmax 的镜头既可能由 hl-camera-switch 属性控制，
+        # 也可能由 MISS 视频请求的 channel 决定。两种都给出，让用户逐个试。
+        options = [(1, 0, '云台镜头（可拖动转向）'),
+                   (2, 0, '枪机镜头（固定视角）')]
+        for value, channel, label in options:
+            action = menu.addAction(label)
+            action.setFont(menu.font())
+            action.triggered.connect(
+                lambda checked=False, v=value, c=channel: self._switch_lens(v, c))
+            actions[(value, channel)] = action
+        menu.addSeparator()
+        for value, channel, label in [(2, 1, '枪机镜头（通道模式）'),
+                                      (1, 0, '云台镜头（通道模式）')]:
+            action = menu.addAction(label)
+            action.setFont(menu.font())
+            action.triggered.connect(
+                lambda checked=False, v=value, c=channel: self._switch_lens(v, c, prop=False))
+            actions[(value, channel)] = action
+        menu.ensurePolished()
+        menu.adjustSize()
+        menu.popup(self._lens_btn.mapToGlobal(QPoint(0, self._lens_btn.height() + 4)))
+        menu.aboutToHide.connect(menu.deleteLater)
+        self._mark_current_lens(menu, actions, options)
+
+    def _mark_current_lens(self, menu, actions, options):
+        """异步读当前镜头再勾选：同步读最坏要等 5 秒，会把界面冻住。"""
+        holder = {'value': None, 'done': False}
+
+        def read():
+            holder['value'] = self._service.read_prop_raw(
+                self._device.did, self._LENS_SIID, self._LENS_PIID)
+            holder['done'] = True
+
+        threading.Thread(target=read, daemon=True, name='lens-probe').start()
+        timer = QTimer(self)
+        timer.setInterval(150)
+        waited = {'ms': 0}
+
+        def tick():
+            waited['ms'] += 150
+            expired = waited['ms'] > 5000
+            if not holder['done'] and not expired:
+                return
+            timer.stop()
+            timer.deleteLater()
+            value = holder['value']
+            if value in (1, 2) and shiboken6.isValid(menu) and menu.isVisible():
+                action = actions.get((value, self._lens_channel))
+                if action is not None:
+                    try:
+                        action.setIcon(qta.icon('mdi.check', color=SiColors.THEME_DIM))
+                    except Exception:
+                        pass
+
+        timer.timeout.connect(tick)
+        timer.start()
+
+    def _switch_lens(self, value, channel=0, prop=True):
+        self._lens_btn.setEnabled(False)
+        self._canvas.message('正在切换镜头…', clear=False)
+        name = {1: '云台', 2: '枪机'}.get(value, '')
+        self._lens_channel = channel
+        self._lens_value = value if prop else None
+        if not prop:
+            # 通道模式：不动设备属性，直接用新会话请求第二路视频
+            self.start(hint=f'正在按通道切换到{name}镜头…')
+            self._lens_btn.setEnabled(True)
+            return
+
+        def work():
+            self._service.set_prop_raw(
+                self._device.did, self._LENS_SIID, self._LENS_PIID, value)
+            # 镜头模组切换有固件/机械延迟，立刻重连会拿到旧镜头那一路上行
+            time.sleep(1.8)
+            return self._service.read_prop_raw(
+                self._device.did, self._LENS_SIID, self._LENS_PIID)
+
+        def success(readback):
+            if not shiboken6.isValid(self):
+                return
+            self._lens_btn.setEnabled(True)
+            if readback is not None and readback != value:
+                actual = {0: '已关闭', 1: '云台', 2: '枪机', 3: '双镜头'}.get(readback, '其他状态')
+                self._canvas.message(f'设备回报仍是{actual}，切换未生效', clear=False)
+                return
+            if readback is None:
+                self._canvas.message('设备未回报镜头状态，正在按请求重连…', clear=False)
+            self.start(hint=f'正在切换到{name}镜头…')
+
+        def failure(error):
+            if shiboken6.isValid(self):
+                self._lens_btn.setEnabled(True)
+                self._canvas.message(f'镜头切换失败：{error}', clear=False)
+
+        self._jobs.submit(work, on_success=success, on_error=failure)
+
     def _diagnostic_snapshot(self):
         result = dict(self._diagnostic)
         result['timeline'] = list(result['timeline'])
@@ -132,6 +266,10 @@ class CameraPreviewPanel(QFrame):
         self._power._apply()
         self._diagnostic_button.setStyleSheet(f'QPushButton {{ background: {SiColors.SURFACE}; '
             f'color: {SiColors.TEXT_SECONDARY}; border: none; border-radius: 8px; padding: 7px 12px; }}')
+        if hasattr(self, '_panel_btn'):
+            self._panel_btn.setStyleSheet(self._diagnostic_button.styleSheet())
+        if self._dual_lens:
+            self._lens_btn.setStyleSheet(self._diagnostic_button.styleSheet())
 
     def _position_drag_hint(self):
         if self._fullscreen is not None or not self._drag_hint.isVisible():
@@ -236,7 +374,7 @@ class CameraPreviewPanel(QFrame):
         if self._power_state is not False and self._session is None:
             self.start()
 
-    def start(self):
+    def start(self, hint=None):
         if not self._device.online or self._power_state is False:
             if not self._device.online:
                 self._record_diagnostic('idle', 'OFFLINE')
@@ -253,7 +391,7 @@ class CameraPreviewPanel(QFrame):
         session = CameraSession()
         self._session = session
         generation = self._generation
-        self._canvas.message('正在申请视频连接…')
+        self._canvas.message(hint or '正在申请视频连接…')
         self._timeout.start(100000)
         def prepare():
             if session.cancelled:
@@ -271,6 +409,7 @@ class CameraPreviewPanel(QFrame):
             def connect_relay():
                 try:
                     url = session.start(source, quality=self._quality,
+                        channel=self._lens_channel,
                         on_progress=lambda value: self._progress.emit(generation, value) if shiboken6.isValid(self) else None,
                         on_audio=lambda rate, data: self._pcm.emit(generation, rate, data) if shiboken6.isValid(self) else None)
                     if session.cancelled or not shiboken6.isValid(self):
@@ -326,6 +465,13 @@ class CameraPreviewPanel(QFrame):
         elif message == 'NOTICE CONTROL_FAILED':
             self._record_diagnostic(self._diagnostic.get('stage', 'playing'), 'CONTROL_FAILED')
             self._canvas.message('摄像头未能执行控制指令，请重试', clear=False)
+        elif message == 'NOTICE QUALITY_REJECTED':
+            # 摄像头明确拒绝了本次画质请求：不要假装切换成功
+            self._record_diagnostic(self._diagnostic.get('stage', 'playing'), 'CONTROL_FAILED')
+            self._canvas.message('摄像头不接受该画质，已保持原画面', clear=False)
+        elif message in ('NOTICE AUDIO_ON', 'NOTICE AUDIO_OFF'):
+            # 中继已重启视频流并切换音频开关，等 PCM 到了再给结论
+            pass
         else:
             stage = {'PHASE RELAY': 'relay', 'PHASE AUTH': 'session_auth', 'PHASE MEDIA': 'media'}.get(message)
             if stage:
@@ -355,7 +501,9 @@ class CameraPreviewPanel(QFrame):
         if self._canvas.drag_busy and time.monotonic() >= self._drag_ready_at:
             self._canvas.set_drag_busy(False)
         height = frame.height()
-        label = '自动' if self._quality == 0 else ('2K' if height > 1080 else f'{height}P')
+        label = ('自动' if self._quality == 0 else
+                 ('2K' if height > 1080 else f'{height}P') if self._quality == 2 else
+                 '全分辨率' if self._quality == 3 else f'{height}P')
         self._canvas.quality.setText(label)
         self._canvas.quality.setToolTip(f'切换画质 · 当前 {frame.width()} × {height}')
 
@@ -388,7 +536,8 @@ class CameraPreviewPanel(QFrame):
         menu = QMenu(self._canvas)
         style_popup_menu(menu)
         known = self._device.model == 'chuangmi.camera.029a02'
-        for value, label in [(0, '自动'), (1, '360P 流畅' if known else '流畅'), (2, '2K 高清' if known else '高清')]:
+        for value, label in [(0, '自动'), (1, '360P 流畅' if known else '流畅'),
+                             (2, '2K 高清' if known else '高清'), (3, '全分辨率')]:
             action = menu.addAction(label)
             action.setFont(menu.font())
             action.setData(value)
@@ -400,38 +549,46 @@ class CameraPreviewPanel(QFrame):
     def _select_quality(self, quality):
         if quality == self._quality:
             return
-        if self._session and self._session.command('QUALITY', quality):
-            self._quality = quality
-            self._canvas.quality.setText({0: '自动', 1: '流畅', 2: '高清'}[quality])
-            # Reopen only the local viewer so its TS header/decoder matches a codec
-            # change (some cameras use a different codec for their SD stream).
-            if self._url:
-                self._switching_quality = True
-                self._player.stop()
-                self._player.setSource(QUrl())
-                self._canvas.message('正在切换画质…', clear=False)
-                generation = self._generation
-                def reopen():
-                    if generation == self._generation and self._session is not None:
-                        self._switching_quality = False
-                        self._timeout.start(25000)
-                        self._player.setSource(QUrl(self._url))
-                        self._player.play()
-                QTimer.singleShot(900, self, reopen)
+        self._quality = quality
+        self._canvas.quality.setText({0: '自动', 1: '流畅', 2: '高清', 3: '全分辨率'}[quality])
+        # 画质是「视频会话级」参数：摄像头只在新建会话时才重新协商分辨率。
+        # 旧实现只在原会话里发 QUALITY 再重开本地播放器，服务端仍推原子码流，
+        # 于是永远停在 360P。这里改成整段重连（重新授权 → 新中继 → 新会话）。
+        if self._session is None and not self._attempted:
+            return
+        self.start(hint='正在切换画质…')
 
     def _toggle_mute(self):
         if not self._session or not self._playing:
             return
-        target = not self._muted
-        if self._session.command('AUDIO', 0 if target else 1):
-            self._muted = target
-            self._canvas.set_muted(target)
-            if target:
-                self._stop_audio()
+        target = not self._muted  # True = 本次点击要静音
+        if not self._session.command('AUDIO', 0 if target else 1):
+            return
+        self._muted = target
+        self._canvas.set_muted(target)
+        if target:
+            self._stop_audio()
+            self._canvas.message('已静音', clear=False)
+            return
+        # 开启声音：中继会重启视频流并把 enableaudio 打开，
+        # 3.5 秒内没有 PCM 说明这台摄像头根本没推音频（多为 Opus）
+        self._audio_tried = time.monotonic()
+        self._canvas.message('正在开启声音…', clear=False)
+        QTimer.singleShot(3500, self, self._check_audio_arrived)
+
+    def _check_audio_arrived(self):
+        if not shiboken6.isValid(self) or self._muted:
+            return
+        if self._audio_seen > self._audio_tried:
+            return
+        self._canvas.message('该摄像头未输出声音（可能只推 Opus 音频）', clear=False)
+        self._muted = True
+        self._canvas.set_muted(True)
 
     def _on_pcm(self, generation, rate, data):
         if generation != self._generation or self._muted or not self._playing:
             return
+        self._audio_seen = time.monotonic()
         if self._audio_sink is None:
             fmt = QAudioFormat()
             fmt.setSampleRate(rate)
@@ -441,6 +598,12 @@ class CameraPreviewPanel(QFrame):
             self._audio_sink.setBufferSize(rate // 2)
             self._audio_sink.setVolume(.8)
             self._audio_io = self._audio_sink.start()
+            if self._audio_io is None:
+                self._canvas.message('无法打开系统音频输出设备', clear=False)
+                self._muted = True
+                self._canvas.set_muted(True)
+                self._stop_audio()
+                return
         if self._audio_io and self._audio_sink.bytesFree() >= len(data):
             self._audio_io.write(data)
 

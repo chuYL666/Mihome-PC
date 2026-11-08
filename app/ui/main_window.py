@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 import qtawesome as qta
 
 from app.core import cache as device_cache
+from app.core import card_order_store
 from app.core import icon_store
 from app.core.jobs import JobExecutor
 from app.core.models import DeviceInfo, SceneInfo, is_speaker
@@ -260,11 +261,19 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self._device_summary)
         top_bar.addStretch(1)
         self._more_menu = QMenu(self)
+        self._more_menu.addAction("摄像头墙（九宫格）").triggered.connect(self.show_camera_wall)
         self._more_menu.addAction("编辑卡片").triggered.connect(self.show_tray_manager)
         self._more_menu.addAction("设置").triggered.connect(self.show_settings)
         self._more_menu.addAction("设备诊断报告").triggered.connect(self.show_device_diagnostics)
         self._more_menu.addSeparator()
         self._more_menu.addAction("关于").triggered.connect(self.show_about)
+        self._wall_btn = QPushButton()
+        self._wall_btn.setIconSize(QSize(24, 24))
+        self._wall_btn.setFixedSize(38, 38)
+        self._wall_btn.setCursor(Qt.PointingHandCursor)
+        self._wall_btn.setAccessibleName("摄像头墙")
+        self._wall_btn.setToolTip("摄像头墙：九宫格同屏查看所有摄像头")
+        self._wall_btn.clicked.connect(lambda checked=False: self.show_camera_wall())
         self._refresh_btn = QPushButton()
         self._refresh_btn.setIconSize(QSize(24, 24))
         self._refresh_btn.setFixedSize(38, 38)
@@ -283,6 +292,7 @@ class MainWindow(QMainWindow):
         btn_layout = QHBoxLayout(btn_wrapper)
         btn_layout.setContentsMargins(0, 0, 0, 0)
         btn_layout.setSpacing(8)
+        btn_layout.addWidget(self._wall_btn)
         btn_layout.addWidget(self._refresh_btn)
         btn_layout.addWidget(self._more_btn)
         top_bar.addWidget(btn_wrapper)
@@ -531,10 +541,11 @@ class MainWindow(QMainWindow):
         self._online_glow.setColor(glow_color)
         self._style_popup_menu(self._more_menu)
         self._more_btn.setIcon(qta.icon('ph.gear-light', color=SiColors.TEXT_SECONDARY))
+        self._wall_btn.setIcon(qta.icon('mdi.view-grid-outline', color=SiColors.TEXT_SECONDARY))
         self._home_btn.setIcon(qta.icon('mdi.chevron-down', color=SiColors.TEXT_SECONDARY))
         self._room_menu_btn.setIcon(qta.icon('mdi.menu', color=SiColors.TEXT_SECONDARY))
         self._room_menu_btn.setStyleSheet('QPushButton { background: transparent; border: none; }')
-        for button in (self._refresh_btn, self._more_btn):
+        for button in (self._wall_btn, self._refresh_btn, self._more_btn):
             button.setStyleSheet(
                 f"QPushButton {{ background: transparent; border: none; border-radius: 8px; }}"
                 f"QPushButton:hover {{ background: {SiColors.BTN_HOVER}; }}")
@@ -1135,13 +1146,18 @@ class MainWindow(QMainWindow):
         from app.core import tray_store
         from app.core.device_controls import tray_eligible
         device = next((d for d in self._all_devices if d.did == did), None)
-        if device is None or not tray_eligible(device):
+        if device is None:
             return None
         menu = QMenu(self)
         self._style_popup_menu(menu)
-        selected = tray_store.contains(did)
-        action = menu.addAction('从托盘窗口移除' if selected else '添加到托盘窗口')
-        action.triggered.connect(lambda _: self._set_device_tray_membership(did, not selected))
+        # 任何设备都能从右键打开功能面板（不限于可加入托盘窗口的设备）
+        details = menu.addAction('设备功能 / 详情')
+        details.triggered.connect(lambda _: self._on_open_device(did))
+        if tray_eligible(device):
+            menu.addSeparator()
+            selected = tray_store.contains(did)
+            action = menu.addAction('从托盘窗口移除' if selected else '添加到托盘窗口')
+            action.triggered.connect(lambda _: self._set_device_tray_membership(did, not selected))
         return menu
 
     def _show_device_tray_menu(self, did, position):
@@ -1618,7 +1634,7 @@ class MainWindow(QMainWindow):
 
         visible = sorted(
             self._visible_devices(),
-            key=lambda d: (0 if d.online else 1, d.name),
+            key=lambda d: (card_order_store.order_index(d.did), 0 if d.online else 1, d.name),
         )
         cols = self._columns_for_width(self._scroll.viewport().width())
         self._grid_columns = cols
@@ -1641,6 +1657,7 @@ class MainWindow(QMainWindow):
             card.power_clicked.connect(self._on_power_clicked)
             card.open_requested.connect(self._on_open_device)
             card.tray_menu_requested.connect(self._show_device_tray_menu)
+            card.reorder_requested.connect(self._on_card_reorder)
             self._cards[device.did] = card
             self._grid.addWidget(card, index // cols, index % cols)
         self._finalize_grid(cols, rows)
@@ -1668,6 +1685,11 @@ class MainWindow(QMainWindow):
             self._scene_cards[scene.scene_id] = card
             self._grid.addWidget(card, index // cols, index % cols)
         self._finalize_grid(cols, rows)
+
+    def _on_card_reorder(self, dragged_did: str, target_did: str) -> None:
+        """卡片拖拽重排：持久化新顺序并立即重建网格。"""
+        card_order_store.reposition(dragged_did, target_did)
+        self._rebuild_grid()
 
     def _finalize_grid(self, cols: int, rows: int) -> None:
         # 剩余空间分配给卡片本身，间距固定；清理历史 stretch，避免
@@ -1889,18 +1911,61 @@ class MainWindow(QMainWindow):
         device = next((d for d in self._all_devices if d.did == did), None)
         if device is None:
             return
-        if not has_device_details(device) or not device.online:
+        if not device.online:
             return
-        if is_light(device):
+        if is_light(device) and has_device_details(device):
             self._open_light_window(device)
             return
         if '.camera.' in device.model:
             self._open_camera_window(device)
             return
+        # 其余设备统一走通用详情面板（属性 / 动作 / 信息）
+        self._open_device_panel(device)
+
+    def _open_device_panel(self, device):
+        """普通设备的详情面板：按 MIoT 规格自动生成可控项与动作列表。"""
+        from app.ui.device_panel import DevicePanelDialog
+        if not hasattr(self, '_device_panels'):
+            self._device_panels = {}
+        current = self._device_panels.get(device.did)
+        if current is not None and shiboken6.isValid(current):
+            current.show()
+            current.raise_()
+            current.activateWindow()
+            return
+        dialog = DevicePanelDialog(self._service, self._jobs, device, self)
+        self._device_panels[device.did] = dialog
+        def closed(_):
+            self._device_panels.pop(device.did, None)
+            self._refresh_closed_detail(device.did)
+            dialog.deleteLater()
+        dialog.finished.connect(closed)
+        dialog.show()
 
     def show_device_diagnostics(self):
         from app.ui.diagnostic_dialog import show_device_diagnostics
         show_device_diagnostics(self, self._service, self._jobs, self._all_devices)
+
+    def show_camera_wall(self):
+        """九宫格摄像头墙：所有在线摄像头同屏概览。"""
+        from app.ui.camera_wall import CameraWallDialog
+        cams = [d for d in self._all_devices if '.camera.' in d.model]
+        if not cams:
+            Toast.info(self, '账号下没有摄像头设备', 3000)
+            return
+        if getattr(self, '_camera_wall', None) is not None and shiboken6.isValid(self._camera_wall):
+            self._camera_wall.show()
+            self._camera_wall.raise_()
+            self._camera_wall.activateWindow()
+            return
+        wall = CameraWallDialog(self._service, self._jobs, cams, self)
+        self._camera_wall = wall
+        def closed(_):
+            self._camera_wall = None
+            wall.deleteLater()
+        wall.finished.connect(closed)
+        wall.show()
+        wall.activateWindow()
 
     def _open_light_window(self, device):
         from app.ui.light_controls import LightControlDialog

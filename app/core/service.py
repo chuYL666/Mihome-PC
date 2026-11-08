@@ -582,6 +582,39 @@ class MijiaService:
             )
         except Exception as exc:
             raise _wrap_error(exc, "设置开关状态失败") from exc
+
+    def set_prop_raw(self, did: str, siid: int, piid: int, value) -> None:
+        """按 siid/piid 直写任意属性（读写路径与 set_power_state 相同）。
+
+        供厂商私有规格属性使用（如双摄 hlmax 的镜头切换
+        other-functions#hl-camera-switch），这些属性不一定能在
+        mijiaDevice.prop_list 里按名字稳定解析。
+        """
+        self._require_control_access()
+        address = _device_address(did)[0]
+        try:
+            rets = self._api.set_devices_prop(
+                [{"did": address, "siid": int(siid), "piid": int(piid), "value": value}]
+            )
+        except Exception as exc:
+            raise _wrap_error(exc, "设置设备属性失败") from exc
+        for item in rets if isinstance(rets, list) else []:
+            if isinstance(item, dict) and item.get("code") not in (0, None):
+                raise ServiceError(f"设备拒绝该操作（错误码 {item.get('code')}）")
+
+    def read_prop_raw(self, did: str, siid: int, piid: int):
+        """按 siid/pii 直读任意属性，失败返回 None。"""
+        address = _device_address(did)[0]
+        try:
+            rets = self._api.get_devices_prop(
+                [{"did": address, "siid": int(siid), "piid": int(piid)}]
+            )
+        except Exception:
+            return None
+        for item in rets if isinstance(rets, list) else []:
+            if isinstance(item, dict) and item.get("code") == 0:
+                return item.get("value")
+        return None
         # 写接口的 code 语义与读不同：上游把 code∈(0,1) 的响应统一
         # 改写为「成功」（apis.py set_devices_prop 出口），其余一律失败
         items = rets if isinstance(rets, list) else [rets]

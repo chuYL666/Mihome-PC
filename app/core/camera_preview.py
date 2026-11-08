@@ -77,10 +77,11 @@ class CameraSession:
     def cancelled(self):
         return self._cancelled.is_set()
 
-    def start(self, source, on_progress=lambda _: None, *, quality=1, on_audio=None) -> str:
+    def start(self, source, on_progress=lambda _: None, *, quality=1, on_audio=None,
+              channel=0) -> str:
         """Run on a dedicated worker, so relay negotiation cannot block cloud controls."""
         try:
-            return self._start(source, on_progress, quality, on_audio)
+            return self._start(source, on_progress, quality, on_audio, channel)
         except CameraPreviewError:
             self.stop()
             raise
@@ -88,15 +89,18 @@ class CameraSession:
             self.stop()
             raise CameraPreviewError("远程视频连接启动失败，请稍后重试。", code='CONFIG') from None
 
-    def _start(self, source, on_progress, quality, on_audio):
+    def _start(self, source, on_progress, quality, on_audio, channel=0):
         java = resource_path("tools/camera_relay/runtime/bin/java.exe")
         jar = resource_path("tools/camera_relay/camera-relay.jar")
         if not java.exists() or not jar.exists():
             raise CameraPreviewError("缺少远程摄像头组件，请安装后重试。", code='CONFIG')
         port, path = _free_port(), "/camera-" + uuid.uuid4().hex + ".ts"
         fields = [str(port), path, source.uid, source.init_string, source.client_public,
-                  source.client_private, source.device_public, source.sign, str(quality)]
-        if quality not in (0, 1, 2):
+                  source.client_private, source.device_public, source.sign, str(quality),
+                  str(int(channel or 0))]
+        # 3 = 全分辨率：新款 2K/双摄机型必须用 3 才肯推原始分辨率，
+        # 旧白名单只放到 2，导致选「全分辨率」直接报错、画面永远是子码流。
+        if quality not in (0, 1, 2, 3):
             raise CameraPreviewError("不支持的画质档位。")
         if any(not isinstance(v, str) or not v or "\n" in v or "\r" in v for v in fields):
             raise CameraPreviewError("远程视频授权格式无效，请重新获取。")
@@ -104,7 +108,11 @@ class CameraSession:
             if self.cancelled:
                 raise CameraPreviewError("预览已取消。")
             process = launch_camera_helper(
-                [str(java), "-Xmx96m", "-XX:ErrorFile=NUL", "-cp", str(jar), "CameraRelay"],
+                # 每路预览都是独立 JVM：限制堆与线程栈、关掉分层编译后半段，
+                # 启动可快 200~400ms，九宫格同时开时内存也省下几十 MB
+                [str(java), "-Xmx80m", "-Xss768k", "-XX:TieredStopAtLevel=1",
+                 "-XX:+UseSerialGC", "-XX:ErrorFile=NUL",
+                 "-cp", str(jar), "CameraRelay"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, encoding="utf-8", bufsize=1,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
@@ -125,6 +133,8 @@ class CameraSession:
                             pass
                         continue
                     if message in {"NOTICE AUDIO_UNSUPPORTED", "NOTICE CONTROL_FAILED",
+                                   "NOTICE QUALITY_REJECTED", "NOTICE AUDIO_ON",
+                                   "NOTICE AUDIO_OFF", "NOTICE CHANNEL_SET",
                                    "INFO VIDEO_CODEC H264", "INFO VIDEO_CODEC H265", "INFO GOP_BOOTSTRAP"}:
                         if not self.cancelled:
                             on_progress(message)
@@ -166,7 +176,8 @@ class CameraSession:
                                  code='CANCELLED' if self.cancelled else 'TIMEOUT')
 
     def command(self, name, value):
-        allowed = {"QUALITY": (0, 1, 2), "AUDIO": (0, 1), "PTZ": (1, 2, 3, 4)}
+        allowed = {"QUALITY": (0, 1, 2, 3), "AUDIO": (0, 1), "PTZ": (1, 2, 3, 4),
+                   "CHANNEL": (0, 1, 2, 3)}
         if name not in allowed or value not in allowed[name]:
             return False
         with self._lock:

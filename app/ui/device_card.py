@@ -12,8 +12,8 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtCore import QMimeData, QPoint, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QDrag
 from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
@@ -43,6 +43,10 @@ class DeviceCard(SiRowCard):
     power_clicked = Signal(str)  # did
     open_requested = Signal(str)  # did
     tray_menu_requested = Signal(str, QPoint)
+    reorder_requested = Signal(str, str)  # (dragged did, target did)
+
+    _DRAG_MIME = "application/x-mijiadeck-card-did"
+    _DRAG_THRESHOLD = 12
 
     def __init__(self, device: DeviceInfo, parent=None):
         super().__init__(parent, self.LeftToRight)
@@ -52,6 +56,9 @@ class DeviceCard(SiRowCard):
         self._online = device.online
         self._metrics_text = None
         self._panel_states = {}
+        self._press_pos = None
+        self._drag_active = False
+        self.setAcceptDrops(True)
 
         self.style_data.background_color = QColor(
             SiColors.OFFLINE_CARD if not self._online else SiColors.CARD)
@@ -59,7 +66,8 @@ class DeviceCard(SiRowCard):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         # 初始基准尺寸；主窗口按实际网格宽度分配最终列宽。
         self.setFixedSize(_CARD_FIXED_WIDTH, _CARD_FIXED_HEIGHT)
-        self.setCursor(Qt.PointingHandCursor if has_device_details(device) else Qt.ArrowCursor)
+        # 任何在线设备都可点开：摄像头/灯具开专属窗口，其余走通用详情面板
+        self.setCursor(Qt.PointingHandCursor if self._online else Qt.ArrowCursor)
         self.muteStretchWidget()
 
         self._power_btn = PowerButton(_POWER_BTN_SIZE, icon_size=22)
@@ -145,7 +153,7 @@ class DeviceCard(SiRowCard):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setBrush(self.style_data.background_color)
-        border = SiColors.CARD_BORDER_HOVER if self._hovered and self._online and has_device_details(self.device) else SiColors.LINE
+        border = SiColors.CARD_BORDER_HOVER if self._hovered and self._online else SiColors.LINE
         painter.setPen(QPen(QColor(border), 1))
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 14, 14)
         painter.end()
@@ -211,23 +219,80 @@ class DeviceCard(SiRowCard):
             self.style_data.background_color = QColor(SiColors.OFFLINE_CARD)
         else:
             self.style_data.background_color = QColor(
-                SiColors.CARD_HOVER if self._hovered and has_device_details(self.device) else SiColors.CARD
+                SiColors.CARD_HOVER if self._hovered and self._online else SiColors.CARD
             )
         self.update()
 
     # ---------- 交互 ----------
 
     def contextMenuEvent(self, event):
-        if tray_eligible(self.device):
-            self.tray_menu_requested.emit(self.device.did, event.globalPos())
-            event.accept()
-        else:
-            event.ignore()
+        # 右键菜单对所有设备开放：里面始终有「设备功能 / 详情」入口
+        self.tray_menu_requested.emit(self.device.did, event.globalPos())
+        event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt 命名约定)
         # 电源钮自己消费点击事件，能走到这里的都是卡片空白区
-        if event.button() == Qt.LeftButton and has_device_details(self.device) and self._online:
+        if event.button() == Qt.LeftButton and not self._drag_active and self._online:
             self.open_requested.emit(self.device.did)
+        self._drag_active = False
+        self._press_pos = None
         super().mouseReleaseEvent(event)
+
+    # ---------- 卡片拖动重排 ----------
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._press_pos = event.position().toPoint()
+            self._drag_active = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        # 按住卡片空白区拖过阈值即发起重排拖拽；拖拽进行中 Qt 会接管
+        # 后续事件，松开不再触发 mouseReleaseEvent 的打开详情逻辑
+        if (self._press_pos is not None and event.buttons() & Qt.LeftButton
+                and not self._drag_active):
+            delta = event.position().toPoint() - self._press_pos
+            if delta.manhattanLength() >= self._DRAG_THRESHOLD:
+                self._drag_active = self._start_reorder_drag()
+                self._press_pos = None
+                if self._drag_active:
+                    return
+        super().mouseMoveEvent(event)
+
+    def _start_reorder_drag(self) -> bool:
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(self._DRAG_MIME, self.device.did.encode("utf-8"))
+        drag.setMimeData(mime)
+        # 半透明缩略图跟随光标：QPixmap 没有 setOpacity，必须经
+        # QPainter 绘制到透明底板上实现；直接调用会抛 AttributeError，
+        # 拖拽在起始处就崩溃（此前功能完全失效正是这个原因）
+        pixmap = self.grab().scaledToWidth(int(self.width() * .9))
+        ghost = QPixmap(pixmap.size())
+        ghost.fill(Qt.transparent)
+        painter = QPainter(ghost)
+        painter.setOpacity(.72)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+        drag.setPixmap(ghost)
+        drag.setHotSpot(self._press_pos)
+        result = drag.exec(Qt.DropAction.MoveAction)
+        return bool(result)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.source() is not self and \
+                event.mimeData().hasFormat(self._DRAG_MIME):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        source_did = bytes(event.mimeData().data(self._DRAG_MIME)).decode("utf-8", "ignore")
+        if source_did and source_did != self.device.did:
+            self.reorder_requested.emit(source_did, self.device.did)
+        event.acceptProposedAction()
 
 
