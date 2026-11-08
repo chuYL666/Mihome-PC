@@ -5,11 +5,11 @@
 # 本程序为自由软件，基于 GPL-3.0 或更高版本发布；在遵守许可证的前提下，
 # 你可以自由使用、修改和再分发它。本程序不含任何担保，详见 LICENSE 文件。
 
-__version__ = "1.1.2"
+__version__ = "1.2.0"
 APP_NAME = "MijiaDeck"
-# Set to this project's public owner/repository before its first release.
-# Empty during local development: never advertise the upstream project's builds.
-UPDATE_REPOSITORY = "Songmanual/MijiaDeck"
+# 本定制分支的发布仓库：更新检查必须指向自己，否则会把用户导回上游原版，
+# 覆盖掉画质/双摄/音频/摄像头墙/设备详情等定制功能。
+UPDATE_REPOSITORY = "chuYL666/Mihome-PC"
 
 import sys
 from pathlib import Path

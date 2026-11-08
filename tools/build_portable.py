@@ -34,6 +34,15 @@ def enable_java_utf8_paths(executable):
         document.documentElement.appendChild(application)
         settings = document.createElementNS(namespace, 'windowsSettings')
         application.appendChild(settings)
+    # 幂等：部分 JDK 的 java.exe 已自带 activeCodePage。重复元素会让
+    # Windows 侧边配置（SxS）校验失败，报 WinError 14001 而无法启动，
+    # 所以先清掉已有的再写入唯一一份。
+    for stale in list(document.getElementsByTagNameNS(
+            'http://schemas.microsoft.com/SMI/2019/WindowsSettings', 'activeCodePage')):
+        stale.parentNode.removeChild(stale)
+    for stale in list(settings.getElementsByTagName('activeCodePage')):
+        if stale.parentNode is settings:
+            settings.removeChild(stale)
     codepage = document.createElement('activeCodePage')
     codepage.setAttribute('xmlns', 'http://schemas.microsoft.com/SMI/2019/WindowsSettings')
     codepage.appendChild(document.createTextNode('UTF-8'))
