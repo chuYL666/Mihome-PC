@@ -176,8 +176,10 @@ public final class CameraRelay {
                 } else if (packet != null && audio && (packet.codecId() == 1027 || packet.codecId() == 1026)) {
                     report("AUDIO 8000 " + Base64.getEncoder().encodeToString(pcm(packet)));
                 } else if (packet != null && audio && packet.codecId() == 1032) {
-                    report("NOTICE AUDIO_UNSUPPORTED");
-                    audio = false;
+                    // 1032 = Opus。JVM 里没有 Opus 解码器，原样透传给桌面端
+                    // 用 libopus 解；此前直接判成「不支持」关掉音频，导致
+                    // chuangmi.camera.039a01 这类机型永远没有声音。
+                    report("AUDIO_OPUS " + Base64.getEncoder().encodeToString(packet.payload()));
                 } else if (System.nanoTime() - lastFrame > Duration.ofSeconds(20).toNanos()) {
                     throw new IllegalStateException();
                 }

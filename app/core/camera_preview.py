@@ -132,6 +132,16 @@ class CameraSession:
                         except ValueError:
                             pass
                         continue
+                    if message.startswith("AUDIO_OPUS ") and on_audio and not self.cancelled:
+                        # Opus 原始包：采样率传 0 表示尚未解码，由播放端
+                        # 用 libopus 解成 48 kHz 单声道 PCM。
+                        try:
+                            packet = base64.b64decode(message[11:], validate=True)
+                            if len(packet) <= 8192:
+                                on_audio(0, packet)
+                        except ValueError:
+                            pass
+                        continue
                     if message in {"NOTICE AUDIO_UNSUPPORTED", "NOTICE CONTROL_FAILED",
                                    "NOTICE QUALITY_REJECTED", "NOTICE AUDIO_ON",
                                    "NOTICE AUDIO_OFF", "NOTICE CHANNEL_SET",

@@ -30,6 +30,14 @@ The maintainer has elected to include the compiled camera-relay.jar and its link
 
 The full distribution includes a reduced Temurin/OpenJDK 21 runtime. Its `legal/` notices and `release` metadata are preserved next to its files. OpenJDK source is available from https://github.com/adoptium/temurin21-binaries and https://github.com/openjdk/jdk21u ; consult the bundled runtime metadata for its build version. No system-wide Java installation is required.
 
+## Audio codec: libopus
+
+Source: https://gitlab.xiph.org/xiph/opus
+
+License: BSD 3-Clause (see docs/licenses/Opus-BSD-3-Clause.txt)
+
+`app/native/opus.dll` is an unmodified libopus build, redistributed to decode the Opus audio stream (codec id 1032) that some cameras send. It is loaded at runtime through ctypes by `app/core/opus_decoder.py` and ships with the Windows package only. Copyright (c) 2001-2011 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo.
+
 ## Branding
 
 The MijiaDeck symbol is derived from the vector artwork supplied by the project maintainer. References to Mijia, Mi Home and Xiaomi identify the supported ecosystem and do not imply official endorsement.

@@ -8,6 +8,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtMultimedia import QMediaPlayer, QVideoSink, QAudioSink, QAudioFormat
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 from app.core.camera_preview import CameraPreviewError, CameraSession, ERRORS
+from app.core.opus_decoder import OUTPUT_RATE as OPUS_RATE, OpusStreamDecoder
 from app.ui.camera_canvas import AspectVideoLayout, CameraCanvas
 from app.ui.power_button import PowerButton
 from app.ui.si_theme import SiColors
@@ -39,6 +40,8 @@ class CameraPreviewPanel(QFrame):
         self._muted = True
         self._audio_sink = None
         self._audio_io = None
+        self._audio_rate = 0
+        self._opus = None
         self._fullscreen = None
         self._drag_ready_at = 0
         self._url = ''
@@ -581,15 +584,29 @@ class CameraPreviewPanel(QFrame):
             return
         if self._audio_seen > self._audio_tried:
             return
-        self._canvas.message('该摄像头未输出声音（可能只推 Opus 音频）', clear=False)
+        self._canvas.message('该摄像头未输出声音（麦克风可能已关闭，或该机型不带音频）', clear=False)
         self._muted = True
         self._canvas.set_muted(True)
 
     def _on_pcm(self, generation, rate, data):
         if generation != self._generation or self._muted or not self._playing:
             return
+        if rate == 0:
+            # Opus 原始包（中继只透传，codecId 1032）：本机用 libopus 解码。
+            if self._opus is None:
+                self._opus = OpusStreamDecoder()
+            data = self._opus.decode(data)
+            if not data:
+                if self._opus.error:
+                    self._canvas.message('音频解码组件不可用：' + self._opus.error, clear=False)
+                    self._muted = True
+                    self._canvas.set_muted(True)
+                    self._stop_audio()
+                return
+            rate = OPUS_RATE
         self._audio_seen = time.monotonic()
-        if self._audio_sink is None:
+        if self._audio_sink is None or self._audio_rate != rate:
+            self._stop_audio()
             fmt = QAudioFormat()
             fmt.setSampleRate(rate)
             fmt.setChannelCount(1)
@@ -598,6 +615,7 @@ class CameraPreviewPanel(QFrame):
             self._audio_sink.setBufferSize(rate // 2)
             self._audio_sink.setVolume(.8)
             self._audio_io = self._audio_sink.start()
+            self._audio_rate = rate
             if self._audio_io is None:
                 self._canvas.message('无法打开系统音频输出设备', clear=False)
                 self._muted = True
@@ -612,6 +630,10 @@ class CameraPreviewPanel(QFrame):
             self._audio_sink.stop()
             self._audio_sink.deleteLater()
         self._audio_sink = self._audio_io = None
+        self._audio_rate = 0
+        if self._opus is not None:
+            self._opus.close()
+            self._opus = None
 
     def _drag(self, direction):
         if (self._session and self._playing and self._canvas.drag_enabled

@@ -84,6 +84,8 @@ def main():
     for name in ['icon.png', 'icon.ico', 'tray_icon.png', 'tray_icon_light.png']:
         args += ['--add-data', f'{ROOT / "app/ui" / name};app/ui']
     args += ['--add-data', f'{ROOT / "app/ui/icons"};app/ui/icons', str(ROOT / 'run.py')]
+    # libopus：Opus 音频（codecId 1032）在本机解码，中继只透传原始包。
+    args += ['--add-binary', f'{ROOT / "app/native/opus.dll"};app/native']
     if '--repack' not in sys.argv:
         subprocess.run(args, cwd=ROOT, check=True)
     bundle = output / 'MijiaDeck'
