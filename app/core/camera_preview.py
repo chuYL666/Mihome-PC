@@ -60,6 +60,16 @@ ERRORS = {
 }
 
 
+def lens_power_on(value) -> bool:
+    """镜头电源开关的真值判断。
+
+    read_prop_raw 对同一属性可能返回 True，也可能返回 1；用 `is True` 判断
+    会把 1 误判成「关着」，于是多写一次电源开关——那会让摄像头的视频管线
+    重启，正在跑的两路会话会一起断。
+    """
+    return value is True or value == 1
+
+
 def _free_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))

@@ -7,7 +7,7 @@ from PySide6.QtCore import QEvent, QPoint, QTimer, QUrl, Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtMultimedia import QMediaPlayer, QVideoSink, QAudioSink, QAudioFormat
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
-from app.core.camera_preview import CameraPreviewError, CameraSession, ERRORS
+from app.core.camera_preview import CameraPreviewError, CameraSession, ERRORS, lens_power_on
 from app.core.opus_decoder import OUTPUT_RATE as OPUS_RATE, OpusStreamDecoder
 from app.ui.camera_canvas import AspectVideoLayout, CameraCanvas
 from app.ui.power_button import PowerButton
@@ -161,10 +161,29 @@ class CameraPreviewPanel(QFrame):
                     pass
             action.triggered.connect(
                 lambda checked=False, c=channel: self._switch_lens(c))
+        menu.addSeparator()
+        dual = menu.addAction('双画面（云台 + 枪机并排）')
+        dual.setFont(menu.font())
+        dual.setToolTip('同一台设备开两路视频，两路画面同时显示')
+        dual.triggered.connect(lambda checked=False: self._open_dual())
         menu.ensurePolished()
         menu.adjustSize()
         menu.popup(self._lens_btn.mapToGlobal(QPoint(0, self._lens_btn.height() + 4)))
         menu.aboutToHide.connect(menu.deleteLater)
+
+    def _open_dual(self):
+        """开双画面窗口：本窗口先断开，把有限的视频连接名额让给两路。"""
+        from app.ui.camera_dual_view import DualCameraDialog
+        dialog = DualCameraDialog(self._service, self._jobs, self._device,
+                                  self._quality, self.window())
+        was_active = self._session is not None or self._playing
+        self.stop()
+        if was_active:
+            dialog.finished.connect(lambda _=0: self.start() if shiboken6.isValid(self) else None)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        dialog.start()
 
     def _switch_lens(self, channel):
         if channel == self._lens_channel:
@@ -180,7 +199,7 @@ class CameraPreviewPanel(QFrame):
             # 目标镜头没上电就先打开它，否则第二路请求会空转
             state = self._service.read_prop_raw(self._device.did, self._LENS_SIID, piid) \
                 if piid is not None else True
-            if state is not True:
+            if not lens_power_on(state):
                 self._service.set_prop_raw(self._device.did, self._LENS_SIID, piid, True)
                 time.sleep(1.5)
             return True
@@ -304,7 +323,7 @@ class CameraPreviewPanel(QFrame):
             self._attempted = False
             self._canvas.message('摄像机已休眠', sleeping=True)
         else:
-            if previous is not True:
+            if not lens_power_on(previous):
                 self._attempted = False
             if self.isVisible() and not self._attempted and not self._session:
                 self.start()

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel
                                QPushButton, QVBoxLayout, QWidget)
 import qtawesome as qta
 
-from app.core.camera_preview import CameraPreviewError, CameraSession
+from app.core.camera_preview import CameraPreviewError, CameraSession, lens_power_on
 from app.core.opus_decoder import OUTPUT_RATE as OPUS_RATE, OpusStreamDecoder
 from app.ui.camera_canvas import CameraCanvas
 from app.ui.si_theme import SiColors
@@ -34,6 +34,7 @@ class _CameraTile(QFrame):
     open_requested = Signal(str)
     audio_solo = Signal(object)      # 请求独占声音：墙负责把其它格子静音
     fullscreen_changed = Signal(object, bool)  # 单格放大 / 复原，墙据此暂停其它格
+    dual_requested = Signal(str)     # 双摄要开「云台 + 枪机」双画面窗口
     _pcm = Signal(int, int, bytes)   # 中继音频线程 → 主线程
 
     def __init__(self, device, jobs, prepare, parent=None):
@@ -417,6 +418,11 @@ class _CameraTile(QFrame):
                 action.setIcon(qta_icon('mdi.check', color=SiColors.THEME_DIM))
             action.triggered.connect(
                 lambda checked=False, c=channel: self._select_lens(c))
+        menu.addSeparator()
+        dual = menu.addAction('双画面（云台 + 枪机并排）')
+        dual.setToolTip('同一台设备同时开两路，两路画面并排显示')
+        dual.triggered.connect(
+            lambda checked=False: self.dual_requested.emit(self._device.did))
         menu.ensurePolished()
         menu.adjustSize()
         menu.popup(self._lens_btn.mapToGlobal(
@@ -496,12 +502,36 @@ class CameraWallDialog(QDialog):
             tile.open_requested.connect(self._open_single)
             tile.audio_solo.connect(self._solo_audio)
             tile.fullscreen_changed.connect(self._on_tile_fullscreen)
+            tile.dual_requested.connect(self._open_dual)
             tile._ensure_lens = self._ensure_lens
             self._tiles[device.did] = tile
             self._grid.addWidget(tile, index // cols, index % cols)
         for col in range(cols):
             self._grid.setColumnStretch(col, 1)
         self.retheme()
+
+    def _open_dual(self, did):
+        """双画面窗口自己也占两路视频连接，先把这一格停掉，关窗后再接回来。"""
+        device = next((d for d in self._devices if d.did == did), None)
+        if device is None:
+            return
+        from app.ui.camera_dual_view import DualCameraDialog
+        tile = self._tiles.get(did)
+        resumable = tile is not None and shiboken6.isValid(tile) and bool(tile._url)
+        if resumable:
+            tile.stop()
+        dialog = DualCameraDialog(self._service, self._jobs, device, 1, self)
+        if resumable:
+            dialog.finished.connect(lambda _=0, t=tile: self._resume_tile(t))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        dialog.start()
+
+    @staticmethod
+    def _resume_tile(tile):
+        if shiboken6.isValid(tile) and not tile._url:
+            tile.start()
 
     def retheme(self):
         for tile in self._tiles.values():
@@ -548,7 +578,7 @@ class CameraWallDialog(QDialog):
 
         def work():
             state = self._service.read_prop_raw(device.did, 6, piid)
-            if state is not True:
+            if not lens_power_on(state):
                 self._service.set_prop_raw(device.did, 6, piid, True)
                 time.sleep(1.5)
             return True
