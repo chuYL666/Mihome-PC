@@ -89,7 +89,7 @@ class CameraCanvas(QWidget):
         row.setContentsMargins(14, 0, 14, 0)
         row.setSpacing(10)
         self.mute = self._button('mdi.volume-off', '开启声音')
-        self.quality = QPushButton('流畅', self._controls)
+        self.quality = QPushButton('480P', self._controls)
         self.quality.setFixedSize(54, 36)
         self.quality.setCursor(Qt.PointingHandCursor)
         self.quality.setToolTip('切换画质')

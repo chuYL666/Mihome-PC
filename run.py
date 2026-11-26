@@ -65,6 +65,10 @@ def main(startup_check=None) -> int:
             pass
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    # 软件解码：九宫格同时播 4~5 路 HEVC 时，核显的 D3D11 解码表面池会被打爆
+    # （Static surface pool size exceeded → DXGI_ERROR_DEVICE_REMOVED → 进程崩溃）。
+    # 480P 子码流用 CPU 解完全够，必须在本进程创建 QApplication 之前设置才生效。
+    os.environ.setdefault('QT_FFMPEG_DECODING_HW_DEVICE_TYPES', ',')
     _apply_ui_scale_env()
     app = QApplication(sys.argv)
 
