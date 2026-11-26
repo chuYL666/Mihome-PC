@@ -16,6 +16,11 @@ for _name, _mode in [('stdin', 'r'), ('stdout', 'w'), ('stderr', 'w')]:
     if getattr(sys, _name) is None:
         setattr(sys, _name, open(os.devnull, _mode, encoding='utf-8'))
 
+# 打包版没有控制台，异常/段错误必须落盘才有据可查；越早安装越好，
+# 这样连 PySide6 导入阶段的失败也能留下记录。
+from app.crash_log import install as _install_crash_log, record_exception
+_install_crash_log()
+
 from PySide6.QtCore import QLockFile, QTimer, Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -209,7 +214,8 @@ if __name__ == "__main__":
     _set_console_visible(os.environ.get("MIHOME_KEEP_CONSOLE") == "1")
     try:
         code = main()
-    except BaseException:
+    except BaseException as exc:
+        record_exception(exc)
         # 崩溃时恢复控制台并保留报错内容等用户确认，
         # 避免窗口一闪而过、用户按 start.bat 提示截屏时什么都看不到
         _set_console_visible(True)
