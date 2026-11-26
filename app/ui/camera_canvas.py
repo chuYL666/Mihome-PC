@@ -67,6 +67,10 @@ class CameraCanvas(QWidget):
         super().__init__(parent)
         self.setMinimumSize(240, 135)
         self._image = QImage()
+        # 铺满模式：画面按「覆盖」缩放并居中裁剪，格子不留黑边。
+        # 九宫格的格子是方形偏高的，16:9 画面按「完整显示」会在上下留很宽的
+        # 黑边，看起来像画面没铺开；小格子里宁可裁掉两侧也要填满。
+        self._fill = False
         self._press = None
         self._drag_anchor = None
         self._drag_enabled = False
@@ -130,6 +134,13 @@ class CameraCanvas(QWidget):
         self._symbol.hide()
         self.update()
 
+    def set_fill(self, fill):
+        """True = 铺满格子（居中裁剪）；False = 完整显示（留黑边）。"""
+        fill = bool(fill)
+        if fill != self._fill:
+            self._fill = fill
+            self.update()
+
     def set_muted(self, muted):
         self.mute.setIcon(qta.icon('mdi.volume-off' if muted else 'mdi.volume-high', color='white', color_disabled='#646b74'))
         self.mute.setToolTip('开启声音' if muted else '静音')
@@ -153,9 +164,19 @@ class CameraCanvas(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor('#080a0d'))
         if not self._image.isNull():
-            size = self._image.size().scaled(self.size(), Qt.KeepAspectRatio)
-            target = QRectF((self.width() - size.width()) / 2, (self.height() - size.height()) / 2, size.width(), size.height())
-            painter.drawImage(target, self._image)
+            if self._fill:
+                # KeepAspectRatioByExpanding：小的那一边也能盖住，多出来的部分裁掉
+                size = self._image.size().scaled(self.size(), Qt.KeepAspectRatioByExpanding)
+                target = QRectF((self.width() - size.width()) / 2,
+                                (self.height() - size.height()) / 2,
+                                size.width(), size.height())
+                painter.setClipRect(self.rect())
+                painter.drawImage(target, self._image)
+                painter.setClipping(False)
+            else:
+                size = self._image.size().scaled(self.size(), Qt.KeepAspectRatio)
+                target = QRectF((self.width() - size.width()) / 2, (self.height() - size.height()) / 2, size.width(), size.height())
+                painter.drawImage(target, self._image)
         gradient = QLinearGradient(0, self.height() - 100, 0, self.height())
         gradient.setColorAt(0, QColor(0, 0, 0, 0))
         gradient.setColorAt(1, QColor(0, 0, 0, 155))

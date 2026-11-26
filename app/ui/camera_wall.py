@@ -96,6 +96,7 @@ class _CameraTile(QFrame):
         header.addWidget(self._open_btn)
         lay.addLayout(header)
         self._canvas = CameraCanvas(self)
+        self._canvas.set_fill(True)   # 格子比例跟 16:9 对不上，铺满比留黑边好看
         self._canvas.message('等待开始…' if device.online else '摄像头已离线')
         self._canvas.set_controls_enabled(False)
         self._canvas.retry.connect(self.start)
