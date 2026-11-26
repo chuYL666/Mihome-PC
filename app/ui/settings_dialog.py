@@ -331,7 +331,7 @@ class SettingsDialog(OverlayDialog):
             self._autostart_toggle.setChecked(settings_store.get_autostart())
         else:
             self._autostart_desc.setText(
-                "仅构建版（build.ps1 产物 dist/MijiaDeck.exe）支持；当前为源码运行模式，"
+                "仅构建版（build.ps1 产物 dist/MijiaDesk.exe）支持；当前为源码运行模式，"
                 "保存设置时将清除残留的自启动注册项")
         _sync_switch(self._autostart_toggle)
         self._autostart_toggle.setEnabled(self._autostart_supported)

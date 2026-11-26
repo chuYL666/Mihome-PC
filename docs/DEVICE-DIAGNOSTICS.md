@@ -4,7 +4,7 @@
 
 ## 用户如何反馈
 
-1. 先在 MijiaDeck 中复现问题。
+1. 先在 MijiaDesk 中复现问题。
 2. 摄像头或灯光控制页点击“诊断报告”；其他设备从主界面右上角菜单进入“设备诊断报告”，选择对应设备。
 3. 等待报告生成，点击“复制诊断报告”，粘贴到 GitHub Issue。
 4. 补充期望功能、操作步骤、实际现象和米家 APP 中是否正常。固件版本若显示为空，可手动从米家 APP 补充。
@@ -24,7 +24,7 @@
 
 ## 维护者如何解读
 
-`schema: mijiadeck-device-diagnostic/1` 是结构版本；报告使用 Markdown 包裹 JSON，可直接贴到 Issue。
+`schema: mijiadesk-device-diagnostic/1` 是结构版本；报告使用 Markdown 包裹 JSON，可直接贴到 Issue。
 
 能力定义与实测结果分开：`capabilities.declared_only` 始终为 true。存在 `notify` 或事件定义，仅表明设备声明了这项能力，不代表程序已订阅、收到事件或具备可用的历史记录接口。型号相同、固件不同也可能有差异，不应只凭元数据宣称完全兼容。
 

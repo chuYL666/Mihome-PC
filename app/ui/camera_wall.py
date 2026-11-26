@@ -459,7 +459,7 @@ class CameraWallDialog(QDialog):
         self._pump_timer = QTimer(self)
         self._pump_timer.setInterval(600)
         self._pump_timer.timeout.connect(self._pump)
-        self.setWindowTitle('摄像头墙 · MijiaDeck')
+        self.setWindowTitle('摄像头墙 · MijiaDesk')
         self.setModal(False)
         self.setMinimumSize(680, 420)
         self._layout = QVBoxLayout(self)

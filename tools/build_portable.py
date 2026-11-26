@@ -65,15 +65,15 @@ def main():
         ', prodvers=' + repr(version_tuple) +
         ', mask=0x3f, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0,0)), '
         'kids=[StringFileInfo([StringTable("040904B0", ['
-        'StringStruct("ProductName", "MijiaDeck"),'
-        'StringStruct("FileDescription", "MijiaDeck - Xiaomi Mi Home Desktop"),'
+        'StringStruct("ProductName", "MijiaDesk"),'
+        'StringStruct("FileDescription", "MijiaDesk - Xiaomi Mi Home Desktop"),'
         'StringStruct("FileVersion", "' + __version__ + '"),'
         'StringStruct("ProductVersion", "' + __version__ + '"),'
-        'StringStruct("OriginalFilename", "MijiaDeck.exe")])]),'
+        'StringStruct("OriginalFilename", "MijiaDesk.exe")])]),'
         'VarFileInfo([VarStruct("Translation", [1033,1200])])])', encoding='utf-8')
     # An explicit allowlist: no project-directory or account/config folder copying.
     args = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onedir', '--windowed',
-            '--name', 'MijiaDeck', '--icon', str(ROOT / 'app/ui/icon.ico'),
+            '--name', 'MijiaDesk', '--icon', str(ROOT / 'app/ui/icon.ico'),
             '--version-file', str(version_file),
             '--distpath', str(output), '--workpath', str(ROOT / 'build/portable'),
             '--specpath', str(ROOT / 'build'), '--paths', str(ROOT),
@@ -88,7 +88,7 @@ def main():
     args += ['--add-binary', f'{ROOT / "app/native/opus.dll"};app/native']
     if '--repack' not in sys.argv:
         subprocess.run(args, cwd=ROOT, check=True)
-    bundle = output / 'MijiaDeck'
+    bundle = output / 'MijiaDesk'
     # Some managed Python distributions have an SSLContext policy that loads
     # this PEM beside ssl.py. Preserve it rather than changing TLS validation.
     import ssl
@@ -115,12 +115,12 @@ def main():
     shutil.copy2(python_license, bundle / 'licenses/Python/LICENSE.txt')
     shutil.copy2(ROOT / 'docs/DEPENDENCY_SOURCES.md', bundle / 'DEPENDENCY_SOURCES.md')
     (bundle / '使用说明.txt').write_text(
-        'MijiaDeck ' + __version__ + '\n\n'
-        '请先完整解压，再运行 MijiaDeck.exe，无需安装 Python。\n'
+        'MijiaDesk ' + __version__ + '\n\n'
+        '请先完整解压，再运行 MijiaDesk.exe，无需安装 Python。\n'
         '不能单独移动 EXE；_internal 文件夹是必需的运行组件。\n'
         '支持 Windows 10 1903+ / Windows 11 x64；不支持 Win7 / Win8。\n'
         '使用米家 APP 扫码登录。\n'
-        '配置保存在 %LOCALAPPDATA%\\MijiaDeck；登录凭据在用户目录 .config\\mijia-api。\n'
+        '配置保存在 %LOCALAPPDATA%\\MijiaDesk；登录凭据在用户目录 .config\\mijia-api。\n'
         + ('本包包含实验性摄像头组件和独立 Java 运行时，无需另装 Java。\n'
            '仅支持兼容摄像头；上游 micam 分发许可尚未明确，详见 THIRD_PARTY_NOTICES.md。\n'
            if with_camera else '本包未附带实验性摄像头传输组件，无法直接播放摄像头视频。\n') +
@@ -129,7 +129,7 @@ def main():
     versions = {}
     for dist in importlib.metadata.distributions():
         name = dist.metadata['Name']
-        if name.lower() in {'mihome-windows', 'mijiadeck', 'pip', 'setuptools'}:
+        if name.lower() in {'mihome-windows', 'mijiadesk', 'pip', 'setuptools'}:
             continue
         versions[name] = dist.version
         for item in dist.files or []:
@@ -183,11 +183,11 @@ def main():
                                          path.is_relative_to(camera_target / 'runtime'))
         if path.is_file() and (path.name in forbidden or (path.suffix == '.jar' and not allowed_relay)):
             raise RuntimeError('Unexpected private or camera backend file: ' + str(path.relative_to(bundle)))
-    archive = output / f'MijiaDeck-v{__version__}-windows-x64.zip'
+    archive = output / f'MijiaDesk-v{__version__}-windows-x64.zip'
     with ZipFile(archive, 'w', ZIP_DEFLATED, compresslevel=6) as package:
         for path in sorted(bundle.rglob('*')):
             if path.is_file():
-                package.write(path, 'MijiaDeck/' + path.relative_to(bundle).as_posix())
+                package.write(path, 'MijiaDesk/' + path.relative_to(bundle).as_posix())
     with archive.open('rb') as source:
         digest = hashlib.file_digest(source, 'sha256').hexdigest()
     archive.with_suffix('.zip.sha256').write_text(digest + '  ' + archive.name + '\n', encoding='ascii')

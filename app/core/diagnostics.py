@@ -145,7 +145,7 @@ def build_report(device, *, spec=None, cached_spec=None, spec_status='not_reques
                  region='unknown', observation=None):
     from .device_controls import device_kinds
     data = {
-        'schema': 'mijiadeck-device-diagnostic/1',
+        'schema': 'mijiadesk-device-diagnostic/1',
         'generated_at_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
         'application': {'version': __version__, 'os': platform.system(), 'os_release': platform.release(),
                         'os_build': platform.version(), 'architecture': platform.machine()},
@@ -157,13 +157,13 @@ def build_report(device, *, spec=None, cached_spec=None, spec_status='not_reques
                          'declared_only': True,
                          'definitions': public_capabilities(spec) if spec is not None else cached_capabilities(cached_spec)},
         'observation': safe_observation(observation),
-        'limits': ['声明存在不代表 MijiaDeck 已实现或实机验证；事件定义不代表已收到事件。',
+        'limits': ['声明存在不代表 MijiaDesk 已实现或实机验证；事件定义不代表已收到事件。',
                    '未采集当前属性值、历史事件、媒体地址或摄像头画面；未执行任何设备动作。',
                    '未尝试视频连接时，无法仅凭 MIoT 规格确定实际视频传输协议。'],
     }
     # Invalid/untrusted role strings are never copied from model metadata.
     data['device']['kinds'] = [x for x in data['device']['kinds'] if identifier(x, 64)]
     content = json.dumps(data, ensure_ascii=False, indent=2).replace('`', '\\u0060')
-    return ('### MijiaDeck 设备诊断报告\n\n'
+    return ('### MijiaDesk 设备诊断报告\n\n'
             '请补充：想实现的功能／操作步骤／实际现象／米家 APP 中是否正常。\n\n'
             '```json\n' + content + '\n```\n')

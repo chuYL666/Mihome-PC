@@ -45,7 +45,7 @@ class DeviceCard(SiRowCard):
     tray_menu_requested = Signal(str, QPoint)
     reorder_requested = Signal(str, str)  # (dragged did, target did)
 
-    _DRAG_MIME = "application/x-mijiadeck-card-did"
+    _DRAG_MIME = "application/x-mijiadesk-card-did"
     _DRAG_THRESHOLD = 12
 
     def __init__(self, device: DeviceInfo, parent=None):

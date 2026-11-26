@@ -1,7 +1,7 @@
-# 米家电脑版（MijiaDeck 定制版）
+# 米家电脑版（MijiaDesk 定制版）
 
-基于 [MijiaDeck](https://github.com/Songmanual/MijiaDeck) v1.1.2（GPL-3.0）的本地定制版，
-补齐了原版在**摄像头画质、双摄切换、多路同屏、设备功能展示**上的缺口。
+基于上游 [MijiaDeck](https://github.com/Songmanual/MijiaDeck) v1.1.2（GPL-3.0）的本地定制版，
+本分支（现名 **MijiaDesk**）补齐了原版在**摄像头画质、双摄切换、多路同屏、设备功能展示**上的缺口。
 
 ## 相对原版的改动
 

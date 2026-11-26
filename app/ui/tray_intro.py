@@ -13,7 +13,7 @@ class TrayIntroDialog(QDialog):
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setWindowModality(Qt.ApplicationModal)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setWindowTitle('MijiaDeck 托盘使用说明')
+        self.setWindowTitle('MijiaDesk 托盘使用说明')
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 24)
         outer.addStretch()
@@ -32,7 +32,7 @@ class TrayIntroDialog(QDialog):
         icon.setPixmap(QPixmap(str(resource_path('app/ui/tray_icon.png'))).scaled(
             40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         heading.addWidget(icon)
-        title = QLabel('从托盘快速操作 MijiaDeck')
+        title = QLabel('从托盘快速操作 MijiaDesk')
         title.setWordWrap(True)
         title.setStyleSheet(f'color: {SiColors.TEXT_PRIMARY}; font-size: 14pt; font-weight: 600;')
         heading.addWidget(title, 1)

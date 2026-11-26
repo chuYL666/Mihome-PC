@@ -19,9 +19,9 @@ def main():
     parser.add_argument('--previous-zip', type=Path,
                         help='Extract an old release first, then overwrite it with this build')
     options = parser.parse_args()
-    archive = ROOT / f'dist/portable/MijiaDeck-v{__version__}-windows-x64.zip'
+    archive = ROOT / f'dist/portable/MijiaDesk-v{__version__}-windows-x64.zip'
     # Windows may briefly retain a loaded per-user font after the process exits.
-    with tempfile.TemporaryDirectory(prefix='MijiaDeck-check-', ignore_cleanup_errors=True) as temporary:
+    with tempfile.TemporaryDirectory(prefix='MijiaDesk-check-', ignore_cleanup_errors=True) as temporary:
         folder = Path(temporary) / '便携版 验证'
         if options.previous_zip:
             with ZipFile(options.previous_zip) as previous:
@@ -30,7 +30,7 @@ def main():
             package.extractall(folder)
         user = Path(temporary) / 'user'
         user.mkdir()
-        preserved = user / 'Local/MijiaDeck/settings.json'
+        preserved = user / 'Local/MijiaDesk/settings.json'
         preserved.parent.mkdir(parents=True)
         preserved.write_text('{"upgrade_test_marker":"preserve-me"}', encoding='utf-8')
         original_settings = preserved.read_bytes()
@@ -43,7 +43,7 @@ def main():
         for key in ['PYTHONHOME', 'PYTHONPATH', 'QT_PLUGIN_PATH', 'QML2_IMPORT_PATH']:
             env.pop(key, None)
         report = ROOT / 'build/packaged-check.json'
-        process = subprocess.run([str(folder / 'MijiaDeck/MijiaDeck.exe'),
+        process = subprocess.run([str(folder / 'MijiaDesk/MijiaDesk.exe'),
                                   '--check-package', str(report)], cwd=folder,
                                  env=env, timeout=45)
         data = json.loads(report.read_text(encoding='utf-8'))
@@ -53,14 +53,14 @@ def main():
                           'report': data}, ensure_ascii=False, indent=2))
         if process.returncode or not data['ok'] or not data['packaged']:
             raise SystemExit(1)
-        info = json.loads((folder / 'MijiaDeck/build-info.json').read_text(encoding='utf-8'))
+        info = json.loads((folder / 'MijiaDesk/build-info.json').read_text(encoding='utf-8'))
         if info['camera_backend_included'] and 'camera-relay-offline-check' not in data['checks']:
             raise RuntimeError('Camera backend was bundled but not validated')
         startup_report = ROOT / 'build/startup-check.json'
         startup_report.unlink(missing_ok=True)
         # Keep the windowed bootloader's absent streams; never redirect them to
         # a log before importing dependencies, which hid the v1.0.1 crash.
-        process = subprocess.run([str(folder / 'MijiaDeck/MijiaDeck.exe'),
+        process = subprocess.run([str(folder / 'MijiaDesk/MijiaDesk.exe'),
                                   '--check-startup', str(startup_report)],
                                  cwd=folder, env=env, timeout=30)
         startup = json.loads(startup_report.read_text(encoding='utf-8'))
@@ -70,7 +70,7 @@ def main():
             raise RuntimeError('Windowed main-window startup failed')
         upgrade_report = ROOT / 'build/upgrade-startup-check.json'
         upgrade_report.unlink(missing_ok=True)
-        process = subprocess.run([str(folder / 'MijiaDeck/MijiaDeck.exe'),
+        process = subprocess.run([str(folder / 'MijiaDesk/MijiaDesk.exe'),
                                   '--check-upgrade-startup', str(upgrade_report)],
                                  cwd=folder, env=env, timeout=30)
         upgrade = json.loads(upgrade_report.read_text(encoding='utf-8'))

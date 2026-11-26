@@ -12,7 +12,7 @@ from app.ui.si_theme import SiColors
 class DiagnosticDialog(QDialog):
     def __init__(self, service, jobs, devices, parent=None, observation=None):
         super().__init__(parent)
-        self.setWindowTitle('设备诊断报告 - MijiaDeck')
+        self.setWindowTitle('设备诊断报告 - MijiaDesk')
         self.setWindowIcon(QIcon(str(resource_path('app/ui/icon.png'))))
         self.setWindowModality(Qt.NonModal)
         self.resize(700, 570)

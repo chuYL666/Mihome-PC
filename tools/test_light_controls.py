@@ -97,7 +97,7 @@ class LocalNetwork(QObject):
 def main():
     import run
     from app.core import settings_store, tray_store, account_store
-    with TemporaryDirectory(prefix='MijiaDeck-light-test-') as folder, ExitStack() as stack:
+    with TemporaryDirectory(prefix='MijiaDesk-light-test-') as folder, ExitStack() as stack:
         stack.enter_context(patch('app.core._json_store.data_dir', return_value=Path(folder)))
         stack.enter_context(patch('app.core._json_store.data_file', side_effect=lambda n: Path(folder) / n))
         stack.enter_context(patch('app.ui.main_window.MijiaService', VirtualLightService))

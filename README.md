@@ -1,12 +1,12 @@
-<p align="center"><img src="app/ui/icon.png" width="88" alt="MijiaDeck logo"></p>
+<p align="center"><img src="app/ui/icon.png" width="88" alt="MijiaDesk logo"></p>
 
-# MijiaDeck · 米家 / 小米智能设备 Windows 桌面控制台
+# MijiaDesk · 米家 / 小米智能设备 Windows 桌面控制台
 
 **让米家智能设备，在 Windows 上更方便地查看、管理和控制。**
 
 [项目介绍与下载](https://songmanual.github.io/MijiaDeck/) · [English website](https://songmanual.github.io/MijiaDeck/en/) · [最新版程序包](https://github.com/Songmanual/MijiaDeck/releases/latest) · [兼容性记录](docs/COMPATIBILITY.md)
 
-MijiaDeck 是开源免费的第三方米家 Windows 桌面客户端，为希望在电脑上完成常用米家操作的用户提供桌面替代方案。工作、学习或听音乐时，不必反复拿起手机：开关设备、查看温湿度、执行场景、远程看摄像头，或者直接给小爱音箱输入文字指令，都可以在电脑上完成。
+MijiaDesk 是开源免费的第三方米家 Windows 桌面客户端，为希望在电脑上完成常用米家操作的用户提供桌面替代方案。工作、学习或听音乐时，不必反复拿起手机：开关设备、查看温湿度、执行场景、远程看摄像头，或者直接给小爱音箱输入文字指令，都可以在电脑上完成。
 
 **摄像头远程查看 · 托盘切换小爱音箱 · 播放与音量控制 · 小爱文字指令**
 
@@ -14,13 +14,13 @@ MijiaDeck 是开源免费的第三方米家 Windows 桌面客户端，为希望�
 
 **A free, open-source Windows desktop client for Xiaomi Mi Home (Mijia).** Control smart-home devices, view compatible cameras remotely with mouse-drag pan/tilt, choose a XiaoAI speaker from the system tray, control playback and volume, run scenes and send text commands to the selected speaker. Light/dark themes and custom accent colors make it fit your desktop. The current interface is primarily in Chinese. A macOS edition is planned, but not yet available.
 
-基于 [MiHome-Windows](https://github.com/huanyuejue/MiHome-Windows) 改进，延续 GPL-3.0-or-later 许可证并保留上游署名。MijiaDeck 与小米、米家官方没有隶属关系。
+基于 [MiHome-Windows](https://github.com/huanyuejue/MiHome-Windows) 改进，延续 GPL-3.0-or-later 许可证并保留上游署名。MijiaDesk 与小米、米家官方没有隶属关系。
 
 ## 常见问题 / FAQ
 
 ### Windows 怎么控制米家设备，需要安卓模拟器吗？
 
-不需要。MijiaDeck 是开源免费的第三方米家电脑版，下载 Windows x64 免安装 ZIP，完整解压后运行 `MijiaDeck.exe`，再用米家 APP 扫码登录即可。设备操作按型号和已适配能力提供。
+不需要。MijiaDesk 是开源免费的第三方米家电脑版，下载 Windows x64 免安装 ZIP，完整解压后运行 `MijiaDesk.exe`，再用米家 APP 扫码登录即可。设备操作按型号和已适配能力提供。
 
 ### 电脑怎么看小米摄像头，可以在外网查看吗？
 
@@ -32,13 +32,13 @@ MijiaDeck 是开源免费的第三方米家 Windows 桌面客户端，为希望�
 
 ### 是小米官方米家 Windows 客户端吗？所有设备都支持吗？
 
-不是官方客户端，也不保证所有设备。MijiaDeck 聚焦 Windows 上的日常查看、控制和场景执行；高级设置、定时和自动化请继续使用米家 APP。设备型号、固件和账号权限会影响可用性；[兼容性记录](docs/COMPATIBILITY.md) 区分实机反馈、接口识别和模拟测试。
+不是官方客户端，也不保证所有设备。MijiaDesk 聚焦 Windows 上的日常查看、控制和场景执行；高级设置、定时和自动化请继续使用米家 APP。设备型号、固件和账号权限会影响可用性；[兼容性记录](docs/COMPATIBILITY.md) 区分实机反馈、接口识别和模拟测试。
 
 ### 有英文版或 macOS 版吗？
 
 网站提供[完整英文介绍](https://songmanual.github.io/MijiaDeck/en/)，程序界面目前主要为中文。macOS 版在计划中，尚无发布包。当前 Windows 包面向 Windows 10 1903+ / Windows 11 x64，不支持 Win7 / Win8。
 
-**English:** MijiaDeck is an unofficial Xiaomi Mi Home Windows desktop app, with no Android emulator required. It offers supported device controls, experimental remote camera previews and XiaoAI speaker controls/text commands from the system tray. Compatibility depends on the model, firmware and account permissions. The app UI is currently primarily Chinese; a macOS build is not available yet. See the [English website](https://songmanual.github.io/MijiaDeck/en/) and [compatibility records](docs/COMPATIBILITY.md).
+**English:** MijiaDesk is an unofficial Xiaomi Mi Home Windows desktop app, with no Android emulator required. It offers supported device controls, experimental remote camera previews and XiaoAI speaker controls/text commands from the system tray. Compatibility depends on the model, firmware and account permissions. The app UI is currently primarily Chinese; a macOS build is not available yet. See the [English website](https://songmanual.github.io/MijiaDeck/en/) and [compatibility records](docs/COMPATIBILITY.md).
 
 ## 界面预览 / Screenshots
 
@@ -46,7 +46,7 @@ MijiaDeck 是开源免费的第三方米家 Windows 桌面客户端，为希望�
 
 ### 主界面 / Main window
 
-![MijiaDeck 米家 Windows 桌面客户端浅色模式：设备卡片、房间分类和小爱文字控制](docs/images/main-light.png)
+![MijiaDesk 米家 Windows 桌面客户端浅色模式：设备卡片、房间分类和小爱文字控制](docs/images/main-light.png)
 
 ### 托盘快捷控制 / System tray quick controls
 
@@ -56,15 +56,15 @@ MijiaDeck 是开源免费的第三方米家 Windows 桌面客户端，为希望�
 
 实际摄像头窗口界面，展示静音、画质切换、全屏与拖动云台提示。**客厅画面为 AI 生成的虚构示意图，不是真实设备录像，也不作为型号兼容性证明。**
 
-![MijiaDeck 米家摄像头 Windows 远程预览窗口：鼠标拖动云台、画质切换和全屏，画面为 AI 生成示意](docs/images/camera-light.jpg)
+![MijiaDesk 米家摄像头 Windows 远程预览窗口：鼠标拖动云台、画质切换和全屏，画面为 AI 生成示意](docs/images/camera-light.jpg)
 
 ### 外观设置 / Appearance settings
 
 支持浅色、深色与跟随系统，提供四种主题色、自定义色值和界面缩放。深色效果在设置截图中展示。
 
-![MijiaDeck 米家 Windows 客户端外观设置：深色模式、主题色和界面缩放](docs/images/settings-dark.jpg)
+![MijiaDesk 米家 Windows 客户端外观设置：深色模式、主题色和界面缩放](docs/images/settings-dark.jpg)
 
-## 为什么做 MijiaDeck
+## 为什么做 MijiaDesk
 
 坐在电脑前时，开关设备、查看房间状态等操作，也应该能直接在桌面完成。
 
@@ -106,7 +106,7 @@ MijiaDeck 是开源免费的第三方米家 Windows 桌面客户端，为希望�
 报告包含型号、可获得的固件版本、设备声明的属性／动作／事件，以及本次摄像头连接中实际观察到的阶段和错误信息；不会上传账号凭证、密钥、设备名称、家庭房间或画面。能力定义与实机验证分开记录，用于逐步排查问题、完善不同型号和使用场景的支持。[诊断报告说明](docs/DEVICE-DIAGNOSTICS.md)
 
 1. 下载并解压完整压缩包。
-2. 运行目录中的 `MijiaDeck.exe`，无需安装 Python。
+2. 运行目录中的 `MijiaDesk.exe`，无需安装 Python。
 3. 使用米家 APP 扫码登录。
 4. 在设置和托盘“编辑卡片”中选择自己的常用设备。
 
@@ -116,11 +116,11 @@ MijiaDeck 是开源免费的第三方米家 Windows 桌面客户端，为希望�
 
 这里的绿色版指**免安装、不需要管理员权限即可正常启动**。配置和登录凭据保存在当前 Windows 用户目录，移动整个程序目录不会自动把账号带到另一台电脑。
 
-- 应用配置与缓存：`%LOCALAPPDATA%\MijiaDeck\`
+- 应用配置与缓存：`%LOCALAPPDATA%\MijiaDesk\`
 - 登录凭据：`~/.config/mijia-api/auth.json`
 - 源码运行时的配置：项目根目录
 
-首次运行打包版会从旧版 `MiHome-Windows` 数据目录或旧 EXE 同目录复制已有配置；不删除旧文件、不覆盖 MijiaDeck 已有配置。开机自启动是可选设置，仅打包版提供。
+首次运行打包版会从旧版 `MijiaDeck` / `MiHome-Windows` 数据目录或旧 EXE 同目录复制已有配置；不删除旧文件、不覆盖 MijiaDesk 已有配置。开机自启动是可选设置，仅打包版提供。
 
 请勿上传 `auth.json`、设备缓存、`settings.json`、`tray.json`、`workbench.json`、`account_profiles.json` 等个人数据文件。
 

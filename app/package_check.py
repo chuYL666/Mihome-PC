@@ -143,7 +143,7 @@ def check_package(report_path: str) -> int:
             path = resource_path('app/ui/' + name)
             if not path.is_file() or QIcon(str(path)).pixmap(32, 32).isNull():
                 raise RuntimeError('Missing or unreadable resource: ' + name)
-        for path in ['app/ui/icons/tray-move.svg', 'app/ui/icons/mijiadeck.svg']:
+        for path in ['app/ui/icons/tray-move.svg', 'app/ui/icons/mijiadesk.svg']:
             if not resource_path(path).is_file():
                 raise RuntimeError('Missing resource: ' + path)
         report['checks'].append('bundled-icons')
@@ -195,7 +195,7 @@ def check_package(report_path: str) -> int:
         player.setVideoOutput(video)
         report['checks'].append('qt-multimedia-initialization')
         qr = qrcode.QRCode()
-        qr.add_data('MijiaDeck offline package check')
+        qr.add_data('MijiaDesk offline package check')
         qr.make(fit=True)
         import io
         qr.make_image().save(io.BytesIO(), format='PNG')

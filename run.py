@@ -60,7 +60,7 @@ def main(startup_check=None) -> int:
             set_app_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
             set_app_id.argtypes = [ctypes.c_wchar_p]
             set_app_id.restype = ctypes.c_long
-            set_app_id('MijiaDeck.Desktop')
+            set_app_id('MijiaDesk.Desktop')
         except (OSError, AttributeError):
             pass
     QApplication.setHighDpiScaleFactorRoundingPolicy(

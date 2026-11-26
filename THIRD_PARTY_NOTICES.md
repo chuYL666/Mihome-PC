@@ -1,6 +1,6 @@
 # Third-party notices / 开源致谢
 
-MijiaDeck is a third-party desktop client and is not affiliated with Xiaomi.
+MijiaDesk is a third-party desktop client and is not affiliated with Xiaomi.
 
 ## MiHome-Windows
 
@@ -26,7 +26,7 @@ Pinned reference commit: 2cc9d9e7607014d1d05c17bc5676544fbb0d5d24
 
 CameraRelay.java is the local adapter used for experimental testing. The upstream transport source is not checked into this repository. No explicit redistribution license was found at the pinned revision. Attribution alone is not redistribution permission.
 
-The maintainer has elected to include the compiled camera-relay.jar and its linked upstream transport classes in the v1.0.1 full distribution. **Upstream redistribution permission has not been confirmed.** The project being free of charge, non-commercial and open source does not itself grant that permission. This notice records the unresolved status; it does not replace permission or relicense upstream code under MijiaDeck's GPL. Generated binaries remain excluded from the Git source tree. See tools/camera_relay/README.md.
+The maintainer has elected to include the compiled camera-relay.jar and its linked upstream transport classes in the v1.0.1 full distribution. **Upstream redistribution permission has not been confirmed.** The project being free of charge, non-commercial and open source does not itself grant that permission. This notice records the unresolved status; it does not replace permission or relicense upstream code under MijiaDesk's GPL. Generated binaries remain excluded from the Git source tree. See tools/camera_relay/README.md.
 
 The full distribution includes a reduced Temurin/OpenJDK 21 runtime. Its `legal/` notices and `release` metadata are preserved next to its files. OpenJDK source is available from https://github.com/adoptium/temurin21-binaries and https://github.com/openjdk/jdk21u ; consult the bundled runtime metadata for its build version. No system-wide Java installation is required.
 
@@ -40,6 +40,6 @@ License: BSD 3-Clause (see docs/licenses/Opus-BSD-3-Clause.txt)
 
 ## Branding
 
-The MijiaDeck symbol is derived from the vector artwork supplied by the project maintainer. References to Mijia, Mi Home and Xiaomi identify the supported ecosystem and do not imply official endorsement.
+The MijiaDesk symbol is derived from the vector artwork supplied by the project maintainer. References to Mijia, Mi Home and Xiaomi identify the supported ecosystem and do not imply official endorsement.
 
 The bundled Java launcher executable has its application manifest modified to request a per-process UTF-8 code page on Windows 10 1903+ for Unicode installation paths. This does not change the system locale. The modification is implemented in `tools/build_portable.py`; runtime legal notices and metadata are retained.

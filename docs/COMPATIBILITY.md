@@ -1,6 +1,6 @@
 # 兼容性与验证记录 / Compatibility
 
-记录版本：MijiaDeck v1.1.0。此页区分实机反馈、接口识别和模拟测试，不将“能看到设备”视为所有操作都已验证。
+记录版本：MijiaDesk v1.1.0。此页区分实机反馈、接口识别和模拟测试，不将“能看到设备”视为所有操作都已验证。
 
 ## 已有证据
 
@@ -29,7 +29,7 @@ The table distinguishes local hardware feedback, metadata recognition and simula
 
 请在 [GitHub Issues](https://github.com/Songmanual/MijiaDeck/issues) 提供：
 
-1. MijiaDeck 版本、Windows 版本。
+1. MijiaDesk 版本、Windows 版本。
 2. 设备型号（例如 `xiaomi.switch.w3`）和固件版本；不知道的字段可以写“未记录”。
 3. 具体操作、预期结果和实际结果；注明米家 APP 中同一功能是否正常。
 4. 如有截图，先遮住家庭名称、设备 ID、登录二维码和摄像头真实画面。

@@ -260,7 +260,9 @@ def set_custom_theme_color(value: str) -> None:
 # ---------- 开机自启动（Windows 注册表 HKCU Run） ----------
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_RUN_VALUE_NAME = "MijiaDeck"
+_RUN_VALUE_NAME = "MijiaDesk"
+# 改名前的条目名：留着会变成「开关显示已关闭、开机却还是启动」的幽灵条目
+_LEGACY_RUN_VALUE_NAMES = ("MijiaDeck",)
 
 
 def autostart_supported() -> bool:
@@ -287,20 +289,52 @@ def _autostart_command() -> str:
     return f'"{argv0}"'
 
 
+def _read_run_value(name: str) -> str | None:
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, name)
+    except OSError:
+        return None
+    return value
+
+
+def _delete_run_values(names) -> None:
+    import winreg
+
+    for name in names:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0,
+                                winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, name)
+        except FileNotFoundError:
+            pass
+
+
 def get_autostart() -> bool:
     """读取注册表实际状态（而非偏好文件），外部改动也能反映。
 
     目标文件已不存在的残留条目视为未开启（返回 False），开关重新
     打开时会用正确的命令覆写——否则无效条目会永远谎报「已开启」。
+    改名前的旧条目会在读取时就地换成新名字，用户不必重新开一次。
     """
     if sys.platform != "win32":
         return False
-    try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
-            value, _ = winreg.QueryValueEx(key, _RUN_VALUE_NAME)
-    except OSError:
+    value = _read_run_value(_RUN_VALUE_NAME)
+    for legacy in _LEGACY_RUN_VALUE_NAMES:
+        if value is not None:
+            break
+        value = _read_run_value(legacy)
+        if value is not None:
+            target = _command_target(value)
+            if target is not None and target.exists() and autostart_supported():
+                # 迁移：旧名字 → 新名字，保留用户原本的选择
+                set_autostart(True)
+            else:
+                _delete_run_values([legacy])
+                value = None
+    if value is None:
         return False
     target = _command_target(value)
     return target is not None and target.exists()
@@ -336,10 +370,6 @@ def set_autostart(value: bool) -> None:
                                 winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, _RUN_VALUE_NAME, 0, winreg.REG_SZ,
                               _autostart_command())
+        _delete_run_values(_LEGACY_RUN_VALUE_NAMES)
         return
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0,
-                            winreg.KEY_SET_VALUE) as key:
-            winreg.DeleteValue(key, _RUN_VALUE_NAME)
-    except FileNotFoundError:
-        pass
+    _delete_run_values((_RUN_VALUE_NAME,) + _LEGACY_RUN_VALUE_NAMES)

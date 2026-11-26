@@ -63,7 +63,7 @@ jobs:
       - name: Retain build and check artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: MijiaDeck-windows-x64
+          name: MijiaDesk-windows-x64
           path: |
             dist/portable/*.zip
             dist/portable/*.sha256
@@ -83,7 +83,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload "$env:RELEASE_TAG" @assets --repo "$env:GITHUB_REPOSITORY" --clobber
           } else {
-            gh release create "$env:RELEASE_TAG" @assets --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "MijiaDeck $env:RELEASE_TAG" --notes-file "docs/release-$env:RELEASE_TAG.md"
+            gh release create "$env:RELEASE_TAG" @assets --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title "MijiaDesk $env:RELEASE_TAG" --notes-file "docs/release-$env:RELEASE_TAG.md"
           }
           if ($LASTEXITCODE -ne 0) { throw "Release upload failed" }
           # One-time correction of the initial release's descriptive title.

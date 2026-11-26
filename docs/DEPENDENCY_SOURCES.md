@@ -1,6 +1,6 @@
 # Bundled libraries, notices and corresponding sources
 
-MijiaDeck is GPL-3.0-or-later. Its corresponding source and build scripts are available beside the release at https://github.com/Songmanual/MijiaDeck (select the matching release tag). Dependency versions for this binary are recorded in `build-info.json`; unmodified installed license texts are collected under `licenses/`.
+MijiaDesk is GPL-3.0-or-later. Its corresponding source and build scripts are available beside the release at https://github.com/Songmanual/MijiaDeck (select the matching release tag). Dependency versions for this binary are recorded in `build-info.json`; unmodified installed license texts are collected under `licenses/`.
 
 ## Qt / PySide6 / Shiboken 6.8.3
 

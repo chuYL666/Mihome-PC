@@ -2,7 +2,7 @@
 # Copyright (C) 2026 MiHome-Windows contributors
 <#
 .SYNOPSIS
-    MijiaDeck 一键构建脚本
+    MijiaDesk 一键构建脚本
 .DESCRIPTION
     自动完成：venv 创建 → 依赖安装 → Nuitka 编译
     需要：Python 3.10+, VS Build Tools 2022
@@ -138,17 +138,17 @@ $NuitkaArgs = @(
     "--jobs=4"
     "--assume-yes-for-downloads"
     "--output-dir=dist"
-    "--output-filename=MijiaDeck.exe"
+    "--output-filename=MijiaDesk.exe"
     # 版本号自动从 app/__init__.py 的 __version__ 读取，单一信源
     $AppVersion = (Select-String -Path "app\__init__.py" -Pattern '^__version__\s*=\s*"(.+?)"').Matches[0].Groups[1].Value
     Write-Host "  Version: $AppVersion" -ForegroundColor Gray
-    "--product-name=MijiaDeck"
+    "--product-name=MijiaDesk"
     "--product-version=$AppVersion"
     "--file-version=$AppVersion"
     "--copyright=Copyright (C) 2026 MiHome-Windows contributors"
 )
 
-Write-Host "`nBuilding MijiaDeck..." -ForegroundColor Cyan
+Write-Host "`nBuilding MijiaDesk..." -ForegroundColor Cyan
 Write-Host "(这是最耗时的一步，通常需要几分钟；期间会输出 Nuitka 各阶段进度，请勿关闭窗口)`n" -ForegroundColor Yellow
 $BuildStart = Get-Date
 & $Python -m nuitka @NuitkaArgs
@@ -168,7 +168,7 @@ if (Test-Path "dist\run.dist") {
     Remove-Item "dist\run.build" -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$Exe = "dist\MijiaDeck.exe"
+$Exe = "dist\MijiaDesk.exe"
 if (Test-Path $Exe) {
     $Size = [math]::Round((Get-Item $Exe).Length / 1MB, 1)
     Write-Host "`n构建成功! $Exe ($Size MB)" -ForegroundColor Green

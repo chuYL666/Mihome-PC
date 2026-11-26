@@ -1,6 +1,6 @@
 # GitHub 仓库展示信息
 
-仓库名：`MijiaDeck`
+仓库名：`MijiaDesk`
 
 Website：https://songmanual.github.io/MijiaDeck/
 

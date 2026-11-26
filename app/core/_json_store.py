@@ -5,7 +5,7 @@
 
 打包形态曾把配置写在 exe 同目录，装进 Program Files 等受保护位置后
 写入失败且被静默吞掉，表现为设置每次启动重置；现统一写入
-%LOCALAPPDATA%\\MijiaDeck\\，并把旧位置的已有文件一次性迁移过来。
+%LOCALAPPDATA%\\MijiaDesk\\，并把旧位置的已有文件一次性迁移过来。
 开发形态仍为仓库根目录（文件均已 gitignore）。
 """
 
@@ -14,8 +14,9 @@ import os
 import sys
 from pathlib import Path
 
-_APP_DIR_NAME = "MijiaDeck"
-_LEGACY_APP_DIR_NAME = "MiHome-Windows"
+_APP_DIR_NAME = "MijiaDesk"
+# 改名史：MiHome-Windows → MijiaDeck → MijiaDesk，旧目录里的配置都要搬过来
+_LEGACY_APP_DIR_NAMES = ("MijiaDeck", "MiHome-Windows")
 # 旧版写在 exe 同目录的全部数据文件，发现即迁移
 _KNOWN_FILES = ("settings.json", "tray.json", "workbench.json", "devices_cache.json", "account_profiles.json")
 _migrated = False
@@ -41,8 +42,9 @@ def data_file(filename: str) -> Path:
 
 def _migrate_legacy_files() -> None:
     target_dir = data_dir()
-    legacy_dirs = [Path(os.environ.get("LOCALAPPDATA") or Path.home()) / _LEGACY_APP_DIR_NAME,
-                   Path(sys.argv[0]).resolve().parent, Path(sys.executable).resolve().parent]
+    local_app = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+    legacy_dirs = [local_app / name for name in _LEGACY_APP_DIR_NAMES]
+    legacy_dirs += [Path(sys.argv[0]).resolve().parent, Path(sys.executable).resolve().parent]
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         for legacy_dir in dict.fromkeys(legacy_dirs):
