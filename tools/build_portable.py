@@ -107,6 +107,13 @@ def main():
         enable_java_utf8_paths(camera_target / 'runtime/bin/java.exe')
     elif camera_target.exists():
         raise RuntimeError('Existing camera files found; use a fresh build for a backend-free package')
+    # Qt 的软件 OpenGL 回退库（Mesa llvmpipe）单文件 19.7 MB、压缩后 7.3 MB，
+    # 是包体里最大的一块。本项目所有画面走 QVideoSink→QImage→QPainter 光栅渲染，
+    # 不使用 OpenGL；而 Gitee 发行版附件上限 100 MB，留着它会顶到上限。
+    # 若将来改用 Qt RHI/OpenGL 渲染，需要把这一行删掉。
+    software_gl = bundle / '_internal/PySide6/opengl32sw.dll'
+    if software_gl.is_file():
+        software_gl.unlink()
     for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md']:
         shutil.copy2(ROOT / name, bundle / name)
     shutil.copytree(ROOT / 'docs/licenses', bundle / 'licenses/upstream', dirs_exist_ok=True)
