@@ -12,7 +12,6 @@ import qtawesome as qta
 from app import APP_NAME, UPDATE_REPOSITORY, __version__
 from app.ui.overlay_dialog import OverlayDialog
 from app.ui.si_theme import SiColors
-from app.ui.toast import Toast
 
 GITHUB_URL = f"https://github.com/{UPDATE_REPOSITORY}" if UPDATE_REPOSITORY else ""
 UPSTREAM_URL = "https://github.com/huanyuejue/MiHome-Windows"
@@ -91,6 +90,13 @@ class AboutDialog(OverlayDialog):
         self._update_btn.clicked.connect(self._check_update)
         self._checking = False
         btn_col.addWidget(self._update_btn, alignment=Qt.AlignHCenter)
+        # 结果直接写在面板里（一次性 Toast 太快、又容易被模态遮罩盖住，
+        # 用户会觉得「点了没反应」）
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._status.setVisible(False)
+        btn_col.addWidget(self._status)
 
         self._github_btn = QPushButton(" GitHub 仓库")
         self._github_btn.setEnabled(bool(GITHUB_URL))
@@ -114,7 +120,8 @@ class AboutDialog(OverlayDialog):
         self._checking = True
         self._update_btn.setEnabled(False)
         self._update_btn.setText(" 检查中…")
-        icon_color = SiColors.TEXT_SECONDARY
+        self._update_btn.setIcon(qta.icon("mdi.update", color=SiColors.TEXT_SECONDARY))
+        self._set_status("正在向 GitHub 查询最新版本…", SiColors.TEXT_SECONDARY)
 
         def _restore() -> None:
             self._checking = False
@@ -127,23 +134,33 @@ class AboutDialog(OverlayDialog):
         def _finish(info, error) -> None:
             checker.deleteLater()
             _restore()
-            if error is not None:
-                Toast.info(self, f"检查更新失败：{error}", 4000)
-                return
             from app import __version__
-            from app.core.update_checker import is_newer
-            if info is None or not is_newer(info.tag, __version__):
-                Toast.info(self, "当前已是最新版本", 2500)
+            from app.core.update_checker import ReleaseNotFound, is_newer
+            if error is not None:
+                if isinstance(error, ReleaseNotFound):
+                    self._set_status(f"暂时没有可用的发布版本：{error}", "#e0a23c")
+                else:
+                    self._set_status(f"检查更新失败：{error}", "#d9534f")
                 return
+            if info is None or not is_newer(info.tag, __version__):
+                self._set_status(f"当前已是最新版本（v{__version__}）", "#3fa86a")
+                return
+            self._set_status(f"发现新版本 {info.tag}，请选择是否前往下载", "#3a8fd9")
             from app.ui.update_flow import prompt_new_version
             prompt_new_version(self, info)
 
         from app.core.update_checker import UpdateChecker
         checker = UpdateChecker(self)
         checker.check_finished.connect(_finish)
-        # 检查中文案用次要色弱化，配合禁用态传达「进行中」
-        self._update_btn.setIcon(qta.icon("mdi.update", color=icon_color))
         checker.check()
+
+    def _set_status(self, text: str, color: str) -> None:
+        if self._status is None:
+            return
+        self._status.setStyleSheet(
+            f"color: {color}; background: transparent; font-size: 9pt;")
+        self._status.setText(text)
+        self._status.setVisible(bool(text))
 
     def _apply_styles(self) -> None:
         """主题相关内联样式：构造与 retheme 共用。"""

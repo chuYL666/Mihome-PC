@@ -74,5 +74,5 @@ run_debug.pyw
 micam.zip
 micam_src/
 tools/camera_relay/runtime/
-*.jar.bak
+*.jar.bak*
 build/relay/

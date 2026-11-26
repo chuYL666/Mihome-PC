@@ -13,7 +13,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMessageBox
 
-from app.core.update_checker import UpdateChecker, is_newer
+from app.core.update_checker import ReleaseNotFound, UpdateChecker, is_newer
 from app.ui.toast import Toast
 
 
@@ -25,7 +25,10 @@ def check_update(parent, manual: bool) -> None:
         checker.deleteLater()
         if error is not None:
             if manual:
-                Toast.info(parent, f"检查更新失败：{error}", 4000)
+                if isinstance(error, ReleaseNotFound):
+                    Toast.info(parent, f"暂时没有可用的发布版本：{error}", 4500)
+                else:
+                    Toast.info(parent, f"检查更新失败：{error}", 4500)
             return
         from app import __version__
         if info is None or not is_newer(info.tag, __version__):
