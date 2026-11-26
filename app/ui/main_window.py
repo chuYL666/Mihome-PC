@@ -1933,14 +1933,45 @@ class MainWindow(QMainWindow):
             current.raise_()
             current.activateWindow()
             return
+        # 打开面板的那一瞬间是进程里最容易出事的时候：主线程在批量创建控件，
+        # 后台轮询线程同时在跑 HTTPS（ssl_read/ssl_write）。两者叠在一起偶发
+        # access violation（详见 %LOCALAPPDATA%\MijiaDesk\logs\crash.log）。
+        # 面板期间暂停状态轮询，关掉后再恢复，把并发窗口压到最小。
+        self._pause_polling_for_panel()
         dialog = DevicePanelDialog(self._service, self._jobs, device, self)
         self._device_panels[device.did] = dialog
+        resumed = {'done': False}
+
         def closed(_):
+            if resumed['done']:
+                return
+            resumed['done'] = True
             self._device_panels.pop(device.did, None)
+            self._resume_polling_after_panel()
             self._refresh_closed_detail(device.did)
             dialog.deleteLater()
         dialog.finished.connect(closed)
         dialog.show()
+
+    def _pause_polling_for_panel(self) -> None:
+        """设备面板打开期间暂停后台状态轮询（可嵌套）。"""
+        self._panel_pause_depth = getattr(self, '_panel_pause_depth', 0) + 1
+        if self._panel_pause_depth != 1:
+            return
+        self._panel_poll_running = self._poll_timer.isActive()
+        self._panel_metrics_running = self._metrics_timer.isActive()
+        self._poll_timer.stop()
+        self._metrics_timer.stop()
+
+    def _resume_polling_after_panel(self) -> None:
+        depth = getattr(self, '_panel_pause_depth', 1) - 1
+        self._panel_pause_depth = max(0, depth)
+        if self._panel_pause_depth:
+            return
+        if getattr(self, '_panel_poll_running', False) and not self._poll_timer.isActive():
+            self._poll_timer.start()
+        if getattr(self, '_panel_metrics_running', False) and not self._metrics_timer.isActive():
+            self._metrics_timer.start()
 
     def show_device_diagnostics(self):
         from app.ui.diagnostic_dialog import show_device_diagnostics

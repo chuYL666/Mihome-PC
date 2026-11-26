@@ -980,37 +980,22 @@ class MijiaService:
         return result
 
     def product_page_name(self, model: str) -> str | None:
-        """抓取 miot-spec 产品页（/p/<model>）的中文商品名。
+        """已停用：不再联网抓取 miot-spec 产品页。
 
-        用于无公开 spec 的设备（如仅蓝牙类）：这类设备在 /spec/ 路径
-        404、specSummary.available=False，没有 spec 产品名可读，只有
-        产品页里有本地化商品名。任何失败都缓存 None（含网络超时）：
-        该功能只是显示名锦上添花，而 jobs 是单线程串行队列，若失败不
-        记忆，秒级的轮询会把超时请求反复排进队列，堵死后续设备控制。
-        老站已基本不可用（响应超时或 404），失败记忆让每型号一个会
-        话只踩一次坑。阻塞，须后台线程调用。
+        这里原本用 requests 去 GET `home.miot-spec.com/p/<model>` 取中文商品名，
+        用来给「无公开 spec」的蓝牙设备补一个中文显示名。两个问题：
+
+        1. 该站早已基本不可用，请求常常拖满 10 秒超时才失败，把单线程的 jobs
+           队列堵住——用户点开设备卡片时面板一直转圈，看起来就是「打不开」；
+        2. 更严重的是崩溃：压测复现出「后台线程正卡在 ssl.send 发这个请求、
+           主线程同时创建 QDialog」时进程直接 access violation（见
+           %LOCALAPPDATA%\\MijiaDesk\\logs\\crash.log 的历史记录）。把请求去掉后
+           同一套反复开关面板的压测 40 步不再崩溃。
+
+        现在只用设备规格（spec）里的中文名，拿不到就显示型号，不再为此发请求。
+        保留方法是为了不破坏既有调用方与缓存结构。
         """
-        if model in self._product_page_names:
-            return self._product_page_names[model]
-        import requests
-
-        name = None
-        try:
-            r = requests.get(f"https://home.miot-spec.com/p/{model}", timeout=10,
-                             headers={"User-Agent": "Mozilla/5.0"})
-            if r.status_code == 200:
-                m = re.search(
-                    r'<script data-page="app" type="application/json">(.*?)</script>',
-                    r.text, re.S)
-                if m:
-                    product = json.loads(m.group(1)).get("props", {}).get("product", {})
-                    name = product.get("name") or None
-                    if name is not None and not any("一" <= ch <= "鿿" for ch in name):
-                        name = None  # 产品名也非中文，无回退价值
-        except Exception as exc:
-            logger.warning("产品页名称查询失败 %s: %s", model, exc)
-        self._product_page_names[model] = name
-        return name
+        return self._product_page_names.setdefault(model, None)
 
     def spec_has_published_functions(self, spec_type: str) -> bool | None:
         """该规格是否发布过含属性的功能 spec。

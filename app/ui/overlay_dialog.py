@@ -14,6 +14,8 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QDialog, QFrame, QPushButton
 from app.ui.si_theme import SiColors
 
+import time
+
 class OverlayDialog(QDialog):
     """遮罩 + 面板 + 淡入淡出的无边框对话框。"""
 
@@ -24,13 +26,14 @@ class OverlayDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setWindowModality(modal)
         self._closing = False
+        self._shown_at = 0.0
 
         if overlay:
             self._overlay = QFrame(self)
             self._overlay.setObjectName("overlay")
             self._overlay.setStyleSheet(
                 "QFrame#overlay { background: rgba(0,0,0,140); border: none; }")
-            self._overlay.mousePressEvent = lambda e: self.reject()
+            self._overlay.mousePressEvent = self._on_overlay_press
         else:
             self._overlay = None
 
@@ -38,6 +41,21 @@ class OverlayDialog(QDialog):
         self._panel.setObjectName("overlayPanel")
         self._panel.setStyleSheet(
             f"QFrame#overlayPanel {{ background: {SiColors.WINDOW_BG}; border: 1px solid {SiColors.LINE}; border-radius: 16px; }}")
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        self._shown_at = time.monotonic()
+        super().showEvent(event)
+
+    def _on_overlay_press(self, event) -> None:
+        """点遮罩关闭。
+
+        刚弹出的 250ms 内收到的点击一律忽略：双击卡片、或按住卡片直到面板
+        出现的场景里，松开/第二击会落在遮罩上，把面板瞬间关掉——用户看到
+        的就是「点开卡片没反应」。
+        """
+        if time.monotonic() - self._shown_at < 0.25:
+            return
+        self.reject()
 
     def _place_overlay(self) -> None:
         """resizeEvent 中调用：遮罩铺满窗口。"""
