@@ -1021,15 +1021,20 @@ class MijiaService:
         网络请求）读取：仅当云端名为纯 ASCII（未改名）且 spec 产品名
         含中文时返回，否则该 did 不在结果中（保持云端原名）。
         """
-        def has_cjk(s: str) -> bool:
-            return any("\u4e00" <= ch <= "\u9fff" for ch in s)
+        from .localization import has_cjk, localize_name
 
         result: dict[str, str] = {}
         for did in dids:
             name = names.get(did, "")
             if not name or has_cjk(name):
                 continue  # 已是中文（用户改名或国内默认名），不替换
-            spec_type = self._device_index.get(did, ("", "", ""))[1]
+            model, spec_type, _ = self._device_index.get(did, ("", "", ""))
+            # ① 内置型号表 / 英文品类 → 中文（零网络，最可靠）
+            zh = localize_name(name, model, spec_type)
+            if zh:
+                result[did] = zh
+                continue
+            # ② spec 自带中文产品名（个别规格有，保留作为补充）
             spec = self._spec_cache.get(spec_type) if spec_type else None
             if not spec:
                 continue

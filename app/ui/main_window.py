@@ -961,39 +961,60 @@ class MainWindow(QMainWindow):
     # ---------- 设备图标 ----------
 
     def _load_card_icons(self) -> None:
-        """增量拉取设备图标：只对缓存里没有的型号调接口。
+        """增量拉取设备图标：只对本地还没有图片的型号调接口。
 
-        已下载图片的卡片回填由 _rebuild_grid 负责（建卡即查本地文件），
-        本方法只处理缺失部分：拉 URL、缺图下发下载；图标 URL 与图片
-        都落本地缓存（见 icon_store），设备列表不变时不会重复调接口。
+        图标是锦上添花，但**不能**排在状态轮询后面：所有网络调用共用一条
+        串行队列，轮询每隔几秒就插一批任务，优先级 20 的图标任务会被永久
+        饿死——这正是之前 29 个型号只下载到 1 张图、卡片退化成线条图标的
+        原因。现在用优先级 4（高于轮询的 10），并把「取 URL + 下载图片」
+        合并成一个任务，减少队列往返。
         """
         if not self._network_online or self._logged_out:
             return
         models = sorted({d.model for d in self._all_devices if d.model})
         if not models:
             return
-        # One model per task lets a manual refresh run between network lookups.
+        busy = getattr(self, '_icon_tasks', None)
+        if busy is None:
+            self._icon_tasks = busy = set()
         for model in models:
-            if icon_store.icon_path(model).is_file():
+            if icon_store.icon_path(model).is_file() or model in busy:
                 continue
+            busy.add(model)
             self._jobs.submit(
-                lambda m=model: self._service.icon_urls([m]),
-                on_success=self._on_icons_ready,
-                priority=20,
+                lambda m=model: self._fetch_one_icon(m),
+                on_success=lambda result, m=model: self._icon_ready(m, result),
+                on_error=lambda _error, m=model: self._icon_ready(m, None),
+                priority=4,
             )
 
+    def _icon_ready(self, model: str, result: tuple[str, str] | None) -> None:
+        busy = getattr(self, '_icon_tasks', None)
+        if busy is not None:
+            busy.discard(model)
+        if result:
+            self._apply_card_icon(*result)
+
+    def _fetch_one_icon(self, model: str) -> tuple[str, str] | None:
+        """取图标地址并下载到本地，返回 (model, path)；失败返回 None。"""
+        if icon_store.icon_path(model).is_file():
+            return None
+        url = self._service.icon_urls([model]).get(model)
+        if not url:
+            return None
+        path = self._service.icon_file(model, url)
+        return (model, str(path)) if path else None
+
     def _on_icons_ready(self, urls: dict[str, str | None]) -> None:
-        """图标 URL 就绪：缺图的下发后台下载，下载完成回填当前可见卡片。"""
+        """兼容旧调用点：图标 URL 就绪后下载并回填。"""
         for model, url in urls.items():
-            if not url:
-                continue
-            if icon_store.icon_path(model).is_file():
+            if not url or icon_store.icon_path(model).is_file():
                 continue
             self._jobs.submit(
                 lambda m=model, u=url: self._service.icon_file(m, u),
                 on_success=lambda p, m=model: self._apply_card_icon(m, str(p))
                 if p else None,
-                priority=20,
+                priority=4,
             )
 
     def _apply_card_icon(self, model: str, path: str) -> None:
@@ -1005,14 +1026,16 @@ class MainWindow(QMainWindow):
                 card.set_icon(Path(path))
 
     def _maybe_localize_names(self) -> None:
-        """未改名英文设备用中文名替换显示名（两个来源按序兜底）。
+        """未改名的英文设备改用中文显示名（纯本地，不发网络请求）。
 
-        ① spec 缓存里的产品名（多数设备有，零网络开销）；
-        ② miot-spec 产品页（/p/<model>）的中文商品名——无公开 spec
-          的设备（如仅蓝牙类）只有这里有，经后台线程抓取并缓存
-          （含“确认无中文名”的结果，不重复查询）。
-        改名设备与中文名设备不受影响；spec 产品名相同的设备
-        （同型号多台）追加 did 尾号以区分。
+        米家列表接口对没改名的设备返回英文产品名（"Mi Smart Clock 4inch"），
+        米家 APP 显示的是中文商品名。中文名来自 app/core/localization.py
+        的内置型号表，型号不认识时按 spec 品类兜底（"Air Conditioner" →
+        空调）。整个过程零网络，不会像旧的 miot-spec 产品页抓取那样把
+        网络线程堵在超时里。
+
+        改名设备与本来就是中文的设备不受影响；同型号多台替换后重名时
+        追加 did 尾号区分。
         """
         if not self._all_devices:
             return
@@ -1020,38 +1043,11 @@ class MainWindow(QMainWindow):
             names_now = {d.did: d.name for d in self._all_devices}
             replacements = self._service.localized_product_names(
                 list(names_now), names_now)
-            ascii_devices = [d for d in self._all_devices if d.name.isascii() and d.model]
-            model_to_did = {d.model: d.did for d in ascii_devices}
-            models = sorted(model_to_did)
-            if models:
-                # 产品页名称按型号缓存，需映射回 did 再并入替换表
-                for model, product_name in self._service.cached_product_page_names(models).items():
-                    replacements[model_to_did[model]] = product_name
         except Exception:
             logger.exception("本地化设备名失败")
             return
         if replacements:
-            if self._apply_display_names(replacements):
-                return  # 已重建并同步托盘
-        # 仍有未解析的型号 → 提交一次后台查询（防重入）
-        pending = sorted({d.model for d in ascii_devices
-                          if not self._service.has_product_page_name(d.model)})
-        if pending and not self._localize_busy:
-            self._localize_busy = True
-            remaining = set(pending)
-            def completed(model, error=None):
-                remaining.discard(model)
-                if error is not None:
-                    logger.warning('产品页名称查询失败: %s', error)
-                if not remaining:
-                    self._on_product_names_fetched()
-            for model in pending:
-                self._jobs.submit(
-                    lambda m=model: self._service.product_page_name(m),
-                    on_success=lambda _, m=model: completed(m),
-                    on_error=lambda error, m=model: completed(m, error),
-                    priority=20,
-                )
+            self._apply_display_names(replacements)
 
     def _apply_display_names(self, replacements: dict[str, str]) -> bool:
         """把替换名写入设备对象并重建展示；返回是否有实际变化。"""
@@ -1074,16 +1070,6 @@ class MainWindow(QMainWindow):
         self._update_count_label()
         self._update_tray_devices()
         return True
-
-    def _on_product_names_fetched(self) -> None:
-        self._localize_busy = False
-        self._maybe_localize_names()
-
-    def _on_product_names_failed(self, error: Exception) -> None:
-        # service 层已把查询失败按「无中文名」缓存（避免反复重试堵队列），
-        # 这里只会收到罕见意外；记录后等下次轮询再走完整流程
-        self._localize_busy = False
-        logger.warning("产品页名称查询失败: %s", error)
 
     def _update_tray_devices(self) -> None:
         if self._tray is not None:

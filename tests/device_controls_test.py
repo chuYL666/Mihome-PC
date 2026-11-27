@@ -154,7 +154,7 @@ class DeviceControlsTest(unittest.TestCase):
             self.assertEqual(card.findChild(LightCornerTag) is not None, bool(features))
             self.assertEqual(row.findChild(LightCornerTag) is not None, bool(features))
 
-    def test_panel_card_has_no_power_or_details_even_with_old_cached_state(self):
+    def test_panel_card_has_no_power_but_opens_read_only_panel(self):
         parent, *_ = self.panel_devices()
         card = DeviceCard(parent)
         self.widgets.append(card)
@@ -169,7 +169,8 @@ class DeviceControlsTest(unittest.TestCase):
         card.open_requested.connect(opened)
         card.show()
         QTest.mouseClick(card, Qt.LeftButton, pos=QPoint(10, 10))
-        opened.assert_not_called()
+        # 面板类设备没有开关能力，但仍可点开只读详情
+        opened.assert_called_once_with(parent.did)
 
     def test_panel_unknown_temperature_is_omitted_and_unknown_channel_is_not_off(self):
         parent, *_ = self.panel_devices()
@@ -177,15 +178,18 @@ class DeviceControlsTest(unittest.TestCase):
         self.assertNotIn('温度', text)
         self.assertIn('状态待确认', text)
 
-    def test_split_switch_and_plain_light_cannot_open_generic_editor(self):
+    def test_split_switch_and_plain_light_open_read_only_panel(self):
         devices = self.panel_devices()
         devices.append(DeviceInfo('lamp', '普通灯', 'test.light.basic', 'H', 'R', True))
         for device in devices:
             self.assertFalse(has_device_details(device))
             with self.assertRaises(ValueError):
                 DeviceDetailDialog(self.service, self.jobs, device)
-            window = SimpleNamespace(_all_devices=[device])
-            MainWindow._on_open_device(window, device.did)  # no dialog or cloud call
+            # 通用编辑器不可用，但卡片点击走只读详情面板
+            open_panel = Mock()
+            window = SimpleNamespace(_all_devices=[device], _open_device_panel=open_panel)
+            MainWindow._on_open_device(window, device.did)
+            open_panel.assert_called_once_with(device)
 
     def test_parent_can_be_added_to_tray_as_display_only(self):
         devices = self.panel_devices()

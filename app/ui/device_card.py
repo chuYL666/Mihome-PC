@@ -13,7 +13,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import QMimeData, QPoint, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QDrag
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QDrag
 from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
@@ -30,7 +30,48 @@ from app.ui.si_theme import SiColors
 import qtawesome as qta
 
 _POWER_BTN_SIZE = 36
-_ICON_SIZE = 34
+_ICON_SIZE = 36
+# 图标底块内再留 3px，产品图不贴圆角边缘
+_ICON_INNER = _ICON_SIZE - 6
+
+
+def _trim_transparent(image: QImage) -> QImage:
+    """裁掉图标四周的透明留白。
+
+    米家 CDN 的产品图固定 168×168，实物只占中间一块（外面还带投影和
+    大片透明区）。直接缩到 36px 会让图标显得又小又糊；按 alpha 通道
+    求包围盒裁一次，同样的容器里图标能大一圈、细节也留得住。
+    """
+    img = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    w, h = img.width(), img.height()
+    if w <= 0 or h <= 0:
+        return image
+    data = bytes(img.constBits())
+    bpl = img.bytesPerLine()
+    top, bottom, left, right = h, -1, w, -1
+    for y in range(h):
+        alphas = data[y * bpl: y * bpl + w * 4][3::4]
+        first = next((i for i, a in enumerate(alphas) if a > 8), -1)
+        if first < 0:
+            continue
+        last = len(alphas) - 1 - next(
+            (i for i, a in enumerate(reversed(alphas)) if a > 8), 0)
+        if top == h:
+            top = y
+        bottom = y
+        left = min(left, first)
+        right = max(right, last)
+    if right < left or bottom < top:
+        return image
+    pad = max(1, int(min(w, h) * 0.02))
+    left, top = max(0, left - pad), max(0, top - pad)
+    right, bottom = min(w - 1, right + pad), min(h - 1, bottom + pad)
+    width, height = right - left + 1, bottom - top + 1
+    # 几乎全透明或裁得过狠时按原图处理，避免把图标裁坏
+    if width < w * 0.2 or height < h * 0.2:
+        return image
+    return image.copy(left, top, width, height)
+
 # 主页内容使用更舒展的尺寸，不影响全局 DPI 或托盘卡片。
 # 网格以此最小宽度计算列数，再均分可用宽度，避免右侧留下整块空白。
 _CARD_FIXED_WIDTH = 212
@@ -99,7 +140,7 @@ class DeviceCard(SiRowCard):
         if not self._online:
             self._power_btn.setEnabled(False)
 
-        # 设备图标：后台拉取就绪后由 set_icon 填入，未就绪前保持隐藏
+        # 设备图标：后台拉取就绪后由 set_icon 填入，未就绪前先画线条图标
         self._icon_label = QLabel()
         self._icon_label.setFixedSize(_ICON_SIZE, _ICON_SIZE)
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -115,8 +156,13 @@ class DeviceCard(SiRowCard):
         }
         icon = next((value for key, value in model_icons.items() if key in device.model),
                     "mdi.devices")
-        self._icon_label.setPixmap(qta.icon(icon, color=SiColors.THEME_DIM).pixmap(24, 24))
-        self._icon_label.setStyleSheet("background: transparent; border: none;")
+        self._fallback_icon = qta.icon(icon, color=SiColors.TEXT_SECONDARY)
+        self._has_real_icon = False
+        self._draw_placeholder()
+        # 产品图多是「深色机身 + 透明背景」，在深色卡片上几乎看不见；
+        # 垫一块比卡片略亮的圆角底，白/黑机身都能看清轮廓。
+        self._icon_label.setStyleSheet(
+            f"background: {SiColors.ICON_TILE}; border-radius: 10px; border: none;")
 
         # 左侧文字列整体垂直居中，与右侧电源钮同一水平轴
         text_col = QWidget()
@@ -161,16 +207,38 @@ class DeviceCard(SiRowCard):
     # ---------- 状态渲染 ----------
 
     def set_icon(self, path: Path | None) -> None:
-        """填入设备图标；路径无效或图片损坏时保持隐藏不打断布局。"""
+        """填入设备图标；路径无效或图片损坏时保留线条图标。"""
         if path is None or not path.is_file():
             return
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
+        image = QImage(str(path))
+        if image.isNull():
             return
-        self._icon_label.setPixmap(pixmap.scaled(
-            _ICON_SIZE, _ICON_SIZE, Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation))
+        image = _trim_transparent(image)
+        # 按屏幕 DPR 渲染：36 逻辑像素在 150% 缩放下要 54 个物理像素，
+        # 只塞 36px 原图会被系统再放大一次，边缘就发虚了。
+        ratio = float(self.devicePixelRatioF() or 1.0)
+        side = max(1, int(round(_ICON_INNER * ratio)))
+        scaled = image.scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
+        pixmap = QPixmap.fromImage(scaled)
+        pixmap.setDevicePixelRatio(ratio)
+        self._icon_label.setPixmap(pixmap)
+        self._has_real_icon = True
         self._icon_label.show()
+
+    def _draw_placeholder(self) -> None:
+        """产品图还没到位时的线条图标，同样按 DPR 渲染避免发虚。"""
+        ratio = float(self.devicePixelRatioF() or 1.0)
+        side = max(1, int(round(_ICON_INNER * 0.86 * ratio)))
+        pixmap = self._fallback_icon.pixmap(side, side)
+        pixmap.setDevicePixelRatio(ratio)
+        self._icon_label.setPixmap(pixmap)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名约定)
+        super().showEvent(event)
+        # 构造时还没上屏，devicePixelRatio 可能是 1；上屏后按真实缩放补画一次
+        if not self._has_real_icon:
+            self._draw_placeholder()
 
     def set_power_state(self, state: bool) -> None:
         if not supports_card_power(self.device):

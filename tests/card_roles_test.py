@@ -31,7 +31,7 @@ class CardRolesTest(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_display_devices_ignore_old_cached_on_and_cannot_open_generic_editor(self):
+    def test_display_devices_ignore_old_cached_on_and_open_read_only_panel(self):
         for model, kind in [('xiaomi.router.rn01', 'router'),
                             ('anseny.sensor_ht.1', 'temperature-humidity-sensor'),
                             ('test.sensor_occupy.1', 'occupancy-sensor'),
@@ -45,7 +45,8 @@ class CardRolesTest(unittest.TestCase):
                 self.assertTrue(card._power_btn.isHidden())
                 opened = Mock(); card.open_requested.connect(opened)
                 card.show(); QTest.mouseClick(card, Qt.LeftButton, pos=QPoint(10,10))
-                opened.assert_not_called()
+                # 没有可写开关，但点击卡片仍打开只读详情面板
+                opened.assert_called_once_with('test')
                 with self.assertRaises(ValueError):
                     DeviceDetailDialog(Mock(), Mock(), d)
                 card.hide(); card.deleteLater()
