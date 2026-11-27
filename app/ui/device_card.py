@@ -26,7 +26,7 @@ from app.core.models import DeviceInfo
 from app.core.device_controls import device_title, device_subtitle, has_device_details, supports_card_power, is_camera, is_light, tray_eligible
 from app.ui.camera_play_button import CameraPlayButton
 from app.ui.power_button import PowerButton
-from app.ui.si_theme import SiColors
+from app.ui.si_theme import SiColors, is_dark
 import numpy
 import qtawesome as qta
 
@@ -37,9 +37,11 @@ _ICON_SIZE = 46
 # 图标底块内留 3px，产品图不贴圆角边缘
 _ICON_INNER = _ICON_SIZE - 6
 _ICON_RADIUS = 13
+# 深色主题下黑色机身产品用的浅底（见 _icon_tile）
+_DARK_PRODUCT_TILE = "#e6ebf3"
 
-# model 图标渲染结果缓存：(路径, mtime, 目标物理像素) -> QPixmap
-_ICON_CACHE: dict[tuple[str, float, int], QPixmap] = {}
+# model 图标渲染结果缓存：(路径, mtime, 目标物理像素, DPR) -> QPixmap
+_ICON_CACHE: dict[tuple[str, float, int, float], QPixmap] = {}
 _ICON_CACHE_LIMIT = 96
 
 
@@ -47,7 +49,7 @@ def _trim_transparent(image: QImage) -> QImage:
     """裁掉图标四周的透明留白。
 
     米家 CDN 的产品图固定 168×168，实物只占中间一块（外面还带投影和
-    大片透明区）。直接缩到 36px 会让图标显得又小又糊；按 alpha 通道
+    大片透明区）。直接缩到显示尺寸会让图标显得又小又糊；按 alpha 通道
     求包围盒裁一次，同样的容器里图标能大一圈、细节也留得住。
     """
     img = image.convertToFormat(QImage.Format.Format_RGBA8888)
@@ -103,6 +105,34 @@ def _sharpen(image: QImage, amount: float = 0.34) -> QImage:
     result = numpy.ascontiguousarray(
         numpy.dstack([out, arr[:, :, 3].astype(numpy.uint8)]))
     return QImage(result.data, w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
+
+
+def _icon_luminance(image: QImage) -> float:
+    """产品图实物的平均亮度（透明像素不计），用于挑选图标底色。"""
+    img = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    w, h = img.width(), img.height()
+    if w <= 0 or h <= 0:
+        return 255.0
+    arr = numpy.frombuffer(bytes(img.constBits()), dtype=numpy.uint8)
+    arr = arr.reshape(h, img.bytesPerLine())[:, : w * 4].reshape(h, w, 4)
+    alpha = arr[:, :, 3] > 40
+    if alpha.sum() < 20:
+        return 255.0
+    rgb = arr[:, :, :3][alpha].astype(numpy.float32)
+    return float((rgb[:, 0] * 0.299 + rgb[:, 1] * 0.587 + rgb[:, 2] * 0.114).mean())
+
+
+def _icon_tile(image: QImage) -> str:
+    """按产品图明暗选底块颜色。
+
+    路由器、小爱音箱这类黑色机身亮度只有 30~65，压在深灰底（#3c3f49，
+    亮度约 62）上几乎看不出轮廓。深色主题下给它们换浅底，亮机身仍旧
+    用深底，两种极端都能拉开对比。浅色主题卡片本来就是白的，统一用
+    主题给的浅底即可。
+    """
+    if not is_dark():
+        return SiColors.ICON_TILE
+    return _DARK_PRODUCT_TILE if _icon_luminance(image) < 110 else SiColors.ICON_TILE
 
 
 def _scaled_icon(path: Path, image: QImage, side: int, ratio: float) -> QPixmap:
@@ -286,6 +316,8 @@ class DeviceCard(SiRowCard):
         side = max(1, int(round(_ICON_INNER * ratio)))
         pixmap = _scaled_icon(path, image, side, ratio)
         self._icon_path = path
+        self._icon_label.setStyleSheet(
+            f"background: {_icon_tile(image)}; border-radius: {_ICON_RADIUS}px; border: none;")
         self._icon_label.setPixmap(pixmap)
         self._has_real_icon = True
         self._icon_label.show()
