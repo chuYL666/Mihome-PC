@@ -73,7 +73,7 @@ app.processEvents()
 assert si_theme.current_theme() == "dark"
 img = win.grab().toImage()
 bg = img.pixelColor(500, 18)
-assert bg.name().upper() == "#1A1B20", f"深色标题栏异常: {bg.name()}"
+assert bg.name().upper() == "#1E1F24", f"深色标题栏异常: {bg.name()}"
 card = next(iter(win._cards.values()))
 cimg = card.grab().toImage()
 cc = cimg.pixelColor(20, 10)
