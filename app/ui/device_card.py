@@ -12,7 +12,7 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QPoint, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QDrag
 from PySide6.QtWidgets import (
     QLabel,
@@ -27,12 +27,20 @@ from app.core.device_controls import device_title, device_subtitle, has_device_d
 from app.ui.camera_play_button import CameraPlayButton
 from app.ui.power_button import PowerButton
 from app.ui.si_theme import SiColors
+import numpy
 import qtawesome as qta
 
 _POWER_BTN_SIZE = 36
-_ICON_SIZE = 36
-# 图标底块内再留 3px，产品图不贴圆角边缘
+# 卡片高度 92，图标占 46 才不至于在 212px 宽的卡片里缩成一个小点。
+# 云端产品图只有 168×168（实物包围盒 80~120px），显示面积越大越能看清细节。
+_ICON_SIZE = 46
+# 图标底块内留 3px，产品图不贴圆角边缘
 _ICON_INNER = _ICON_SIZE - 6
+_ICON_RADIUS = 13
+
+# model 图标渲染结果缓存：(路径, mtime, 目标物理像素) -> QPixmap
+_ICON_CACHE: dict[tuple[str, float, int], QPixmap] = {}
+_ICON_CACHE_LIMIT = 96
 
 
 def _trim_transparent(image: QImage) -> QImage:
@@ -71,6 +79,64 @@ def _trim_transparent(image: QImage) -> QImage:
     if width < w * 0.2 or height < h * 0.2:
         return image
     return image.copy(left, top, width, height)
+
+
+def _sharpen(image: QImage, amount: float = 0.34) -> QImage:
+    """对缩到显示尺寸的产品图做一次轻微锐化。
+
+    云端产品图缩到 80px 左右后，机身缝线、面板按键这类 1px 细节会被
+    双线性抹成灰边，看着就是「糊」。用 3×3 拉普拉斯提一点边，透明度
+    作为遮罩，透明区域的 RGB 不参与，避免边缘出现黑边光晕。
+    """
+    img = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    w, h = img.width(), img.height()
+    if w < 8 or h < 8:
+        return image
+    arr = numpy.frombuffer(bytes(img.constBits()), dtype=numpy.uint8)
+    arr = arr.reshape(h, img.bytesPerLine())[:, : w * 4].reshape(h, w, 4).astype(numpy.int16)
+    rgb = arr[:, :, :3]
+    lap = numpy.zeros_like(rgb)
+    lap[1:-1, 1:-1] = (4 * rgb[1:-1, 1:-1] - rgb[:-2, 1:-1] - rgb[2:, 1:-1]
+                       - rgb[1:-1, :-2] - rgb[1:-1, 2:])
+    mask = (arr[:, :, 3:4] / 255.0)
+    out = numpy.clip(rgb + lap * amount * mask, 0, 255).astype(numpy.uint8)
+    result = numpy.ascontiguousarray(
+        numpy.dstack([out, arr[:, :, 3].astype(numpy.uint8)]))
+    return QImage(result.data, w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
+
+
+def _scaled_icon(path: Path, image: QImage, side: int, ratio: float) -> QPixmap:
+    """把云端产品图渲染成 side 个物理像素的 pixmap。
+
+    米家 CDN 只有 168×168 这一档（实测 @2x / !large / big 目录都不存在），
+    裁掉透明边后实物也就 80~120px，缩到显示尺寸时单次双线性会把细线
+    抹成灰边。这里逐级减半、每步最多缩一半，等效盒式预滤波，边缘和
+    线条比一步缩到位干净；结果按（路径, mtime, 尺寸, DPR）缓存，切房间
+    重建卡片时不再重复解码和裁剪。
+    """
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    key = (str(path), mtime, side, round(ratio, 3))
+    cached = _ICON_CACHE.get(key)
+    if cached is not None:
+        return cached
+    scaled = _trim_transparent(image)
+    while scaled.width() > side * 2 or scaled.height() > side * 2:
+        scaled = scaled.scaled(
+            max(side, scaled.width() // 2), max(side, scaled.height() // 2),
+            Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    if scaled.width() != side or scaled.height() != side:
+        scaled = scaled.scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
+    scaled = _sharpen(scaled)
+    pixmap = QPixmap.fromImage(scaled)
+    pixmap.setDevicePixelRatio(ratio)
+    if len(_ICON_CACHE) >= _ICON_CACHE_LIMIT:
+        _ICON_CACHE.clear()
+    _ICON_CACHE[key] = pixmap
+    return pixmap
 
 # 主页内容使用更舒展的尺寸，不影响全局 DPI 或托盘卡片。
 # 网格以此最小宽度计算列数，再均分可用宽度，避免右侧留下整块空白。
@@ -158,11 +224,12 @@ class DeviceCard(SiRowCard):
                     "mdi.devices")
         self._fallback_icon = qta.icon(icon, color=SiColors.TEXT_SECONDARY)
         self._has_real_icon = False
+        self._icon_path = None
         self._draw_placeholder()
         # 产品图多是「深色机身 + 透明背景」，在深色卡片上几乎看不见；
         # 垫一块比卡片略亮的圆角底，白/黑机身都能看清轮廓。
         self._icon_label.setStyleSheet(
-            f"background: {SiColors.ICON_TILE}; border-radius: 10px; border: none;")
+            f"background: {SiColors.ICON_TILE}; border-radius: {_ICON_RADIUS}px; border: none;")
 
         # 左侧文字列整体垂直居中，与右侧电源钮同一水平轴
         text_col = QWidget()
@@ -213,32 +280,37 @@ class DeviceCard(SiRowCard):
         image = QImage(str(path))
         if image.isNull():
             return
-        image = _trim_transparent(image)
-        # 按屏幕 DPR 渲染：36 逻辑像素在 150% 缩放下要 54 个物理像素，
-        # 只塞 36px 原图会被系统再放大一次，边缘就发虚了。
+        # 按屏幕 DPR 渲染：40 逻辑像素在 200% 缩放下要 80 个物理像素，
+        # 只塞 40px 原图会被系统再放大一次，边缘就发虚了。
         ratio = float(self.devicePixelRatioF() or 1.0)
         side = max(1, int(round(_ICON_INNER * ratio)))
-        scaled = image.scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio,
-                              Qt.TransformationMode.SmoothTransformation)
-        pixmap = QPixmap.fromImage(scaled)
-        pixmap.setDevicePixelRatio(ratio)
+        pixmap = _scaled_icon(path, image, side, ratio)
+        self._icon_path = path
         self._icon_label.setPixmap(pixmap)
         self._has_real_icon = True
         self._icon_label.show()
 
     def _draw_placeholder(self) -> None:
-        """产品图还没到位时的线条图标，同样按 DPR 渲染避免发虚。"""
-        ratio = float(self.devicePixelRatioF() or 1.0)
-        side = max(1, int(round(_ICON_INNER * 0.86 * ratio)))
-        pixmap = self._fallback_icon.pixmap(side, side)
-        pixmap.setDevicePixelRatio(ratio)
-        self._icon_label.setPixmap(pixmap)
+        """产品图还没到位时的线条图标。
+
+        qtawesome 的 pixmap(w, h) 收的是逻辑尺寸、返回的位图已按屏幕
+        DPR 放大并自带 dpr；再手动乘一次 ratio 会让图标变成两倍大，
+        在 46px 的槽里被裁掉一圈（表现为线条图标糊边、顶到圆角外）。
+        """
+        side = max(1, int(round(_ICON_INNER * 0.86)))
+        self._icon_label.setPixmap(self._fallback_icon.pixmap(side, side))
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名约定)
         super().showEvent(event)
         # 构造时还没上屏，devicePixelRatio 可能是 1；上屏后按真实缩放补画一次
         if not self._has_real_icon:
             self._draw_placeholder()
+
+    def changeEvent(self, event) -> None:  # noqa: N802 (Qt 命名约定)
+        super().changeEvent(event)
+        # 窗口拖到不同缩放比例的屏幕上时 DPR 会变，重画一次避免图标被系统拉伸
+        if event.type() == QEvent.Type.DevicePixelRatioChange and self._icon_path:
+            self.set_icon(self._icon_path)
 
     def set_power_state(self, state: bool) -> None:
         if not supports_card_power(self.device):

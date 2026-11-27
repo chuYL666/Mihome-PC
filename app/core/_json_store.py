@@ -19,6 +19,8 @@ _APP_DIR_NAME = "MijiaDesk"
 _LEGACY_APP_DIR_NAMES = ("MijiaDeck", "MiHome-Windows")
 # 旧版写在 exe 同目录的全部数据文件，发现即迁移
 _KNOWN_FILES = ("settings.json", "tray.json", "workbench.json", "devices_cache.json", "account_profiles.json")
+# 设备图标缓存子目录，改名时同样要搬（见 _migrate_icons）
+_ICONS_SUBDIR = "icons"
 _migrated = False
 
 
@@ -56,8 +58,30 @@ def _migrate_legacy_files() -> None:
                 if legacy.is_file() and not target.exists():
                     # Copy only: preserve old data and never overwrite new preferences.
                     target.write_bytes(legacy.read_bytes())
+            _migrate_icons(legacy_dir, target_dir)
     except OSError:
         pass
+
+
+def _migrate_icons(legacy_dir: Path, target_dir: Path) -> None:
+    """把旧目录里的设备图标一起搬过来。
+
+    改名时这里只搬了 json 配置，icons 子目录被落下，卡片只能重新联网
+    下载；而 get_icon 接口对批量型号有限流，实际常常只下到一两张，其余
+    卡片退化成灰色线条图标——用户看到的就是「图标不清楚」。
+    """
+    legacy_icons = legacy_dir / _ICONS_SUBDIR
+    if not legacy_icons.is_dir():
+        return
+    target_icons = target_dir / _ICONS_SUBDIR
+    target_icons.mkdir(parents=True, exist_ok=True)
+    for image in legacy_icons.glob("*.png"):
+        target = target_icons / image.name
+        if not target.exists():
+            try:
+                target.write_bytes(image.read_bytes())
+            except OSError:
+                continue
 
 
 def read_json(path: Path, default: dict) -> dict:
