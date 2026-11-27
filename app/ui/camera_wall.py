@@ -2,9 +2,10 @@
 """Multi-camera wall: every camera in one grid, one independent relay per tile.
 
 Each tile is a self-contained session (auth -> relay -> local TS -> QMediaPlayer),
-mirroring the single-camera flow in ui/camera_preview.py but without per-tile
-audio, fullscreen or PTZ: the wall is a glanceable overview. Double-click a tile
-to open the full single-camera window for controls.
+mirroring the single-camera flow in ui/camera_preview.py. The wall is a
+glanceable overview but now also exposes per-tile PTZ direction pads; two-way
+talk stays in the single-camera window so several tiles never fight over the
+microphone. Double-click a tile (or the 大窗 button) for the full controls.
 """
 import shiboken6
 import threading
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel
                                QPushButton, QVBoxLayout, QWidget)
 import qtawesome as qta
 
+from app.core import camera_ptz
 from app.core.camera_preview import CameraPreviewError, CameraSession, lens_power_on
 from app.core.opus_decoder import OUTPUT_RATE as OPUS_RATE, OpusStreamDecoder
 from app.ui.camera_canvas import CameraCanvas
@@ -50,6 +52,9 @@ class _CameraTile(QFrame):
         self._lens = channel         # 0=云台镜头，1=枪机镜头（第二路流）
         self._lens_locked = lock_lens  # 墙里双摄拆成两格后不再允许单格切镜头
         self._wait_peer = False      # 第二路要等云台先出帧（见 CameraWallDialog._pump）
+        # 云台：按型号/镜头判定能力。枪机副镜头固定不可转动。
+        self._ptz_cap = camera_ptz.capability(getattr(device, 'model', ''), channel)
+        self._ptz_ready_at = 0.0
         self._got_frame = False
         self._start_at = 0.0
         self._url = ''
@@ -102,7 +107,7 @@ class _CameraTile(QFrame):
         self._open_btn.clicked.connect(lambda: self.open_requested.emit(device.did))
         header.addWidget(self._open_btn)
         lay.addLayout(header)
-        self._canvas = CameraCanvas(self)
+        self._canvas = CameraCanvas(self, compact_ptz=True)
         # 完整显示，绝不裁剪：格子的宽高比由窗口决定，跟 16:9 对不上时
         # 按 KeepAspectRatio 缩放留边。之前用「铺满 + 居中裁剪」，监控画面
         # 两侧的人/车会被切掉，看墙的人以为设备没拍到。
@@ -113,6 +118,12 @@ class _CameraTile(QFrame):
         self._canvas.mute_clicked.connect(self._on_mute_clicked)
         self._canvas.quality_clicked.connect(lambda: self._show_quality(self._canvas.quality))
         self._canvas.fullscreen_clicked.connect(self._toggle_fullscreen)
+        self._canvas.ptz_step.connect(self._ptz_step)
+        self._canvas.ptz_released.connect(self._ptz_release)
+        self._canvas.set_ptz_capability(self._ptz_cap)
+        # 多路同时抢麦克风没有意义，通话统一在「大窗」里进行
+        self._canvas.set_talk_supported(False)
+        self._canvas.talk.setToolTip('通话请点右上角「大窗」')
         self._pcm.connect(self._on_pcm)
         self._body = lay
         lay.addWidget(self._canvas, 1)
@@ -345,6 +356,24 @@ class _CameraTile(QFrame):
         if self._opus is not None:
             self._opus.close()
             self._opus = None
+
+    # ---- 云台（墙里也直接可转，不必先开大窗）----
+    def _ptz_step(self, direction):
+        if (not self._session or not self._url or not self._ptz_cap
+                or self._switching or time.monotonic() < self._ptz_ready_at):
+            return
+        if self._ptz_cap == camera_ptz.CONTINUOUS:
+            ok = self._session.motor(camera_ptz.DIRECTION_NAMES.get(direction, 'stop'), 5)
+        else:
+            ok = self._session.command('PTZ', direction)
+        if ok:
+            self._ptz_ready_at = (time.monotonic() +
+                                  camera_ptz.step_interval(self._ptz_cap) / 1000.0 * 0.75)
+
+    def _ptz_release(self):
+        self._ptz_ready_at = 0.0
+        if self._ptz_cap == camera_ptz.CONTINUOUS and self._session:
+            self._session.motor('stop', 0)
 
     # ---- fullscreen（单格放大）----
     def _toggle_fullscreen(self):

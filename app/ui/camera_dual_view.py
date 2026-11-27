@@ -49,8 +49,12 @@ class _LensPane(QWidget):
         self.caption = QLabel(title)
         self.caption.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.caption)
-        self.canvas = CameraCanvas(self)
+        self.canvas = CameraCanvas(self, compact_ptz=True)
         self.canvas.set_controls_enabled(False)
+        # 双画面窗口只做并排观看：控制条按钮没有接会话，通话/云台统一
+        # 交给单摄像头窗口和摄像头墙，避免出现点了没反应的按钮。
+        self.canvas.set_talk_supported(False)
+        self.canvas._controls.hide()
         # 双画面各占一半宽度，不再按单画面留最小高度
         self.canvas.setMinimumSize(180, 80)
         self.video = AspectVideoLayout()

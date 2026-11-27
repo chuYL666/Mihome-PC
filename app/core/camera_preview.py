@@ -245,6 +245,9 @@ class CameraSession:
             if message in {"NOTICE AUDIO_UNSUPPORTED", "NOTICE CONTROL_FAILED",
                            "NOTICE QUALITY_REJECTED", "NOTICE AUDIO_ON",
                            "NOTICE AUDIO_OFF", "NOTICE CHANNEL_SET",
+                           "NOTICE TALK_ON", "NOTICE TALK_OFF", "NOTICE TALK_FAILED",
+                           "NOTICE SPEAKER_UNSUPPORTED", "NOTICE CODEC_SET",
+                           "NOTICE MOTOR_OK", "NOTICE MOTOR_FAILED",
                            "INFO VIDEO_CODEC H264", "INFO VIDEO_CODEC H265", "INFO GOP_BOOTSTRAP"}:
                 on_progress(message)
                 return
@@ -289,11 +292,35 @@ class CameraSession:
                    "CHANNEL": (0, 1, 2, 3)}
         if name not in allowed or value not in allowed[name]:
             return False
+        return self._send(f"{name} {value}")
+
+    def _send(self, line):
+        """向这一路会话发一条自由格式命令（中继侧按空格/TAB 解析）。"""
         with self._lock:
             host, session_id = self._host, self._sid
-        if host is None or session_id is None or self.cancelled:
+        if host is None or session_id is None or self.cancelled or "\n" in line:
             return False
-        return host.send(session_id, f"{name} {value}")
+        return host.send(session_id, line)
+
+    # ---- 云台（连续移动机型用 direction/speed，固定步长机型仍用 PTZ 1-4）----
+    def motor(self, direction, speed=5):
+        if direction not in ('left', 'right', 'up', 'down', 'stop'):
+            return False
+        return self._send(f"MOTOR {direction} {max(0, min(10, int(speed)))}")
+
+    # ---- 对讲：0x106 开始 / 0x108 结束，音频包走 DRW channel 3 ----
+    def talk(self, enabled):
+        return self._send(f"TALK {1 if enabled else 0}")
+
+    def set_speaker_codec(self, codec):
+        if codec not in (1024, 1026, 1027, 1032):
+            return False
+        return self._send(f"CODEC {codec}")
+
+    def send_audio(self, packet):
+        if not packet or len(packet) > 4096:
+            return False
+        return self._send("AUD " + base64.b64encode(packet).decode('ascii'))
 
     def stop(self):
         self._cancelled.set()

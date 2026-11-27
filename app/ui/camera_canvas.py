@@ -1,10 +1,110 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Aspect-preserving camera canvas with controls painted above decoded video."""
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLayout, QPushButton, QWidget
+from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QLayout,
+                               QPushButton, QWidget)
 import qtawesome as qta
 import time
+
+from app.core import camera_ptz
+
+
+class PtzPad(QWidget):
+    """半透明方向盘：按住方向键连发，松开通知调用方停止（连续机型用）。
+
+    之前云台只能靠「在画面上拖一下」触发一步，既没有明确入口，也无法
+    连续调整。这里给单摄像头窗口和摄像头墙格子共用一个紧凑控件。
+    """
+    step = Signal(int)
+    released = Signal()
+
+    _ARROWS = [
+        (camera_ptz.UP, 'mdi.chevron-up', 0, 1),
+        (camera_ptz.LEFT, 'mdi.chevron-left', 1, 0),
+        (camera_ptz.RIGHT, 'mdi.chevron-right', 1, 2),
+        (camera_ptz.DOWN, 'mdi.chevron-down', 2, 1),
+    ]
+
+    def __init__(self, parent=None, *, compact=False):
+        super().__init__(parent)
+        self._capability = camera_ptz.NONE
+        self._direction = 0
+        self._enabled = False
+        self._side = 26 if compact else 32
+        self.setObjectName('ptzPad')
+        self.setFixedSize(self._side * 3 + 12, self._side * 3 + 12)
+        self.setAttribute(Qt.WA_NoMousePropagation, True)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(6, 6, 6, 6)
+        grid.setSpacing(2)
+        self._buttons = {}
+        for direction, icon, row, col in self._ARROWS:
+            button = QPushButton(self)
+            button.setIcon(qta.icon(icon, color='#f2f5fa'))
+            button.setIconSize(QSize(self._side - 10, self._side - 10))
+            button.setFixedSize(self._side, self._side)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip({'1': '向左转', '2': '向右转',
+                               '3': '向上转', '4': '向下转'}[str(direction)])
+            button.pressed.connect(lambda d=direction: self._begin(d))
+            button.released.connect(self._end)
+            grid.addWidget(button, row, col)
+            self._buttons[direction] = button
+        home = QPushButton(self)
+        home.setIcon(qta.icon('mdi.circle-small', color='#cfd6e2'))
+        home.setIconSize(QSize(self._side - 8, self._side - 8))
+        home.setFixedSize(self._side, self._side)
+        home.setToolTip('云台方向控制')
+        home.setFlat(True)
+        home.setAttribute(Qt.WA_TransparentForMouseEvents)
+        grid.addWidget(home, 1, 1)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._repeat)
+        self._style()
+        self.hide()
+
+    def _style(self):
+        r = 12
+        self.setStyleSheet(
+            f'QWidget#ptzPad {{ background: rgba(12, 16, 22, 115); '
+            f'border: 1px solid rgba(255,255,255,45); border-radius: {r}px; }} '
+            f'QPushButton {{ background: rgba(255,255,255,18); border: none; '
+            f'border-radius: 6px; }} '
+            f'QPushButton:hover {{ background: rgba(255,255,255,55); }} '
+            f'QPushButton:pressed {{ background: rgba(93, 173, 125, 150); }} '
+            f'QPushButton:disabled {{ background: rgba(255,255,255,8); }}')
+
+    def set_capability(self, capability):
+        self._capability = capability or camera_ptz.NONE
+        self.set_enabled(bool(self._capability))
+
+    def set_enabled(self, enabled):
+        self._enabled = bool(enabled)
+        if not enabled:
+            self._end()
+            self.hide()
+            return
+        self.show()
+        for button in self._buttons.values():
+            button.setEnabled(True)
+
+    def _begin(self, direction):
+        if not self._enabled:
+            return
+        self._direction = direction
+        self.step.emit(direction)
+        self._timer.start(camera_ptz.step_interval(self._capability))
+
+    def _repeat(self):
+        if self._enabled and self._direction:
+            self.step.emit(self._direction)
+
+    def _end(self):
+        self._timer.stop()
+        if self._direction:
+            self._direction = 0
+            self.released.emit()
 
 
 class AspectVideoLayout(QLayout):
@@ -62,8 +162,11 @@ class CameraCanvas(QWidget):
     mute_clicked = Signal()
     quality_clicked = Signal()
     fullscreen_clicked = Signal()
+    talk_clicked = Signal()
+    ptz_step = Signal(int)
+    ptz_released = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, compact_ptz=False):
         super().__init__(parent)
         self.setMinimumSize(240, 135)
         self._image = QImage()
@@ -76,6 +179,10 @@ class CameraCanvas(QWidget):
         self.drag_busy = False
         self._gesture_sent = False
         self._last_drag_step = 0.0
+        self._ptz_capability = camera_ptz.NONE
+        self._controls_enabled = False
+        self._talk_supported = True
+        self._talking = False
         self._notice = QLabel(self)
         self._notice.setAlignment(Qt.AlignCenter)
         self._notice.setWordWrap(True)
@@ -92,6 +199,7 @@ class CameraCanvas(QWidget):
         row.setContentsMargins(14, 0, 14, 0)
         row.setSpacing(10)
         self.mute = self._button('mdi.volume-off', '开启声音')
+        self.talk = self._button('mdi.microphone-outline', '与摄像头通话（点击开始说话）')
         self.quality = QPushButton('480P', self._controls)
         self.quality.setFixedSize(54, 36)
         self.quality.setCursor(Qt.PointingHandCursor)
@@ -99,13 +207,18 @@ class CameraCanvas(QWidget):
         self.quality.setStyleSheet('QPushButton { background: transparent; color: white; border: 1px solid rgba(255,255,255,190); border-radius: 6px; font-size: 10pt; font-weight: 600; } QPushButton:hover { background: rgba(255,255,255,25); } QPushButton:disabled { color: #646b74; border-color: #646b74; }')
         self.fullscreen = self._button('mdi.fullscreen', '全屏观看')
         row.addWidget(self.mute)
+        row.addWidget(self.talk)
         row.addStretch()
         row.addWidget(self.quality)
         row.addStretch()
         row.addWidget(self.fullscreen)
         self.mute.clicked.connect(self.mute_clicked)
+        self.talk.clicked.connect(self.talk_clicked)
         self.quality.clicked.connect(self.quality_clicked)
         self.fullscreen.clicked.connect(self.fullscreen_clicked)
+        self._ptz_pad = PtzPad(self, compact=compact_ptz)
+        self._ptz_pad.step.connect(self.ptz_step)
+        self._ptz_pad.released.connect(self.ptz_released)
         self.message('正在读取摄像头状态…')
         self.set_controls_enabled(False)
 
@@ -148,15 +261,47 @@ class CameraCanvas(QWidget):
         self.fullscreen.setIcon(qta.icon('mdi.fullscreen-exit' if fullscreen else 'mdi.fullscreen', color='white', color_disabled='#646b74'))
         self.fullscreen.setToolTip('退出全屏（Esc）' if fullscreen else '全屏观看')
 
+    def set_ptz_capability(self, capability):
+        """按机型开启方向盘；'', 'step', 'continuous' 见 app.core.camera_ptz。"""
+        self._ptz_capability = capability or camera_ptz.NONE
+        self._ptz_pad.set_capability(self._ptz_capability)
+        self._ptz_pad.set_enabled(self._controls_enabled and bool(self._ptz_capability))
+
+    def ptz_capability(self):
+        return self._ptz_capability
+
+    def set_talk_supported(self, supported):
+        self._talk_supported = bool(supported)
+        self.talk.setEnabled(self._controls_enabled and self._talk_supported)
+        if not self._talk_supported:
+            self.talk.setToolTip('该摄像头的对讲功能暂不可用')
+
+    def set_talking(self, talking):
+        self._talking = bool(talking)
+        self.talk.setIcon(qta.icon('mdi.microphone' if talking else 'mdi.microphone-outline',
+                                   color='#7ce0a8' if talking else 'white'))
+        self.talk.setToolTip('结束通话' if talking else '与摄像头通话（点击开始说话）')
+        border = 'rgba(124,224,168,230)' if talking else 'rgba(255,255,255,190)'
+        background = 'rgba(64,168,110,90)' if talking else 'transparent'
+        self.talk.setStyleSheet(
+            f'QPushButton {{ background: {background}; '
+            f'border: 1px solid {border}; border-radius: 7px; }} '
+            f'QPushButton:hover {{ background: rgba(255,255,255,25); }}')
+
     def set_controls_enabled(self, enabled):
+        self._controls_enabled = bool(enabled)
         self.mute.setEnabled(enabled)
         self.quality.setEnabled(enabled)
+        self.talk.setEnabled(bool(enabled) and self._talk_supported)
         self.fullscreen.setEnabled(True)
+        self._ptz_pad.set_enabled(bool(enabled) and bool(self._ptz_capability))
 
     def resizeEvent(self, event):
         self._controls.setGeometry(14, max(0, self.height() - 62), max(0, self.width() - 28), 46)
         self._notice.setGeometry(24, max(0, self.height() // 2 - 15), max(0, self.width() - 48), 58)
         self._symbol.setGeometry(0, max(0, self.height() // 2 - 80), self.width(), 56)
+        self._ptz_pad.move(max(0, self.width() - self._ptz_pad.width() - 12),
+                           max(0, (self.height() - self._ptz_pad.height()) // 2 - 10))
         super().resizeEvent(event)
 
     def paintEvent(self, event):

@@ -7,7 +7,9 @@ from PySide6.QtCore import QEvent, QPoint, QTimer, QUrl, Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtMultimedia import QMediaPlayer, QVideoSink, QAudioSink, QAudioFormat
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
+from app.core import camera_ptz
 from app.core.camera_preview import CameraPreviewError, CameraSession, ERRORS, lens_power_on
+from app.core.camera_talk import TalkSession, speaker_codec
 from app.core.opus_decoder import OUTPUT_RATE as OPUS_RATE, OpusStreamDecoder
 from app.ui.camera_canvas import AspectVideoLayout, CameraCanvas
 from app.ui.power_button import PowerButton
@@ -44,6 +46,9 @@ class CameraPreviewPanel(QFrame):
         self._opus = None
         self._fullscreen = None
         self._drag_ready_at = 0
+        self._ptz_ready_at = 0
+        self._ptz_cap = camera_ptz.capability(getattr(device, 'model', ''), 0)
+        self._talk = None
         self._url = ''
         self._switching_quality = False
         self._layout = QVBoxLayout(self)
@@ -88,11 +93,12 @@ class CameraPreviewPanel(QFrame):
         self._video_layout = AspectVideoLayout()
         self._video_layout.addWidget(self._canvas)
         self._layout.addLayout(self._video_layout, 1)
-        self._drag_hint = QLabel('拖拽画面可调整摄像头角度', self)
+        self._drag_hint = QLabel(
+            '按住右侧方向盘调整摄像头角度，也可直接拖拽画面', self)
         self._drag_hint.setAlignment(Qt.AlignCenter)
-        self._drag_hint.setVisible(device.model == 'chuangmi.camera.029a02')
+        self._drag_hint.setVisible(bool(self._ptz_cap))
         self._hint_slot = QWidget(self)
-        self._hint_slot.setVisible(device.model == 'chuangmi.camera.029a02')
+        self._hint_slot.setVisible(bool(self._ptz_cap))
         self._layout.addWidget(self._hint_slot)
         self._canvas.installEventFilter(self)
         self._canvas.retry.connect(self._retry)
@@ -100,6 +106,12 @@ class CameraPreviewPanel(QFrame):
         self._canvas.quality_clicked.connect(self._show_quality)
         self._canvas.fullscreen_clicked.connect(self._toggle_fullscreen)
         self._canvas.dragged.connect(self._drag)
+        self._canvas.ptz_step.connect(self._ptz_step)
+        self._canvas.ptz_released.connect(self._ptz_release)
+        self._canvas.talk_clicked.connect(self._toggle_talk)
+        self._canvas.set_ptz_capability(self._ptz_cap)
+        self._canvas.set_talk_supported(
+            speaker_codec(getattr(device, 'model', '')) is not None)
         self._sink = QVideoSink(self)
         self._player = QMediaPlayer(self)
         self._player.setVideoOutput(self._sink)
@@ -446,6 +458,13 @@ class CameraPreviewPanel(QFrame):
         elif message == 'NOTICE CONTROL_FAILED':
             self._record_diagnostic(self._diagnostic.get('stage', 'playing'), 'CONTROL_FAILED')
             self._canvas.message('摄像头未能执行控制指令，请重试', clear=False)
+        elif message == 'NOTICE TALK_FAILED':
+            self._record_diagnostic(self._diagnostic.get('stage', 'playing'), 'TALK_FAILED')
+            self._on_talk_error('摄像头未接受对讲请求（该机型或固件可能不支持）')
+        elif message == 'NOTICE SPEAKER_UNSUPPORTED':
+            self._on_talk_error('该摄像头的对讲编码暂不支持')
+        elif message == 'NOTICE MOTOR_FAILED':
+            self._canvas.message('云台指令未被接受（该机型可能不支持电机）', clear=False)
         elif message == 'NOTICE QUALITY_REJECTED':
             # 摄像头明确拒绝了本次画质请求：不要假装切换成功
             self._record_diagnostic(self._diagnostic.get('stage', 'playing'), 'CONTROL_FAILED')
@@ -476,7 +495,7 @@ class CameraPreviewPanel(QFrame):
         self._canvas.set_frame(image)
         self._video_layout.set_ratio(image.width(), image.height())
         self._canvas.set_controls_enabled(True)
-        self._canvas.drag_enabled = self._device.model == 'chuangmi.camera.029a02'
+        self._canvas.drag_enabled = bool(self._ptz_cap)
         # No motor-completion acknowledgement is available. Require both a
         # settling interval and a subsequent decoded frame before another drag.
         if self._canvas.drag_busy and time.monotonic() >= self._drag_ready_at:
@@ -528,7 +547,8 @@ class CameraPreviewPanel(QFrame):
         if quality == self._quality:
             return
         self._quality = quality
-        self._canvas.quality.setText({1: '480P', 3: '全分辨率'}[quality])
+        self._canvas.quality.setText(
+            {0: '自动', 1: '480P', 2: '720P', 3: '全分辨率'}.get(quality, f'{quality}P'))
         # 画质是「视频会话级」参数：摄像头只在新建会话时才重新协商分辨率。
         # 旧实现只在原会话里发 QUALITY 再重开本地播放器，服务端仍推原子码流，
         # 于是永远停在 360P。这里改成整段重连（重新授权 → 新中继 → 新会话）。
@@ -613,9 +633,58 @@ class CameraPreviewPanel(QFrame):
     def _drag(self, direction):
         if (self._session and self._playing and self._canvas.drag_enabled
                 and not self._canvas.drag_busy and not self._switching_quality):
-            if self._session.command('PTZ', direction):
+            ok = (self._session.motor(camera_ptz.DIRECTION_NAMES[direction], 5)
+                  if self._ptz_cap == camera_ptz.CONTINUOUS
+                  else self._session.command('PTZ', direction))
+            if ok:
                 self._drag_ready_at = time.monotonic() + 1.5
                 self._canvas.set_drag_busy(True)
+
+    def _ptz_step(self, direction):
+        """方向盘：按住连发（间隔由 PtzPad 控制），这里只做会话级节流。"""
+        if (not self._session or not self._playing or not self._ptz_cap
+                or self._switching_quality or time.monotonic() < self._ptz_ready_at):
+            return
+        if self._ptz_cap == camera_ptz.CONTINUOUS:
+            ok = self._session.motor(camera_ptz.DIRECTION_NAMES.get(direction, 'stop'), 5)
+        else:
+            ok = self._session.command('PTZ', direction)
+        if ok:
+            self._ptz_ready_at = (time.monotonic() +
+                                  camera_ptz.step_interval(self._ptz_cap) / 1000.0 * 0.75)
+
+    def _ptz_release(self):
+        self._ptz_ready_at = 0
+        if self._ptz_cap == camera_ptz.CONTINUOUS and self._session:
+            self._session.motor('stop', 0)
+
+    # ---- 对讲（电脑麦克风 → 摄像头扬声器）----
+    def _toggle_talk(self):
+        if self._talk is not None:
+            self._stop_talk()
+            return
+        if not self._session or not self._playing:
+            self._canvas.message('画面加载完成后才能通话', clear=False)
+            return
+        talk = TalkSession(self._session, getattr(self._device, 'model', ''), self)
+        talk.error.connect(self._on_talk_error)
+        if talk.start():
+            self._talk = talk
+            self._canvas.set_talking(True)
+            self._canvas.message('正在通话 · 再点麦克风结束', clear=False)
+        else:
+            talk.deleteLater()
+
+    def _stop_talk(self):
+        talk, self._talk = self._talk, None
+        if talk is not None:
+            talk.stop()
+            talk.deleteLater()
+        self._canvas.set_talking(False)
+
+    def _on_talk_error(self, text):
+        self._stop_talk()
+        self._canvas.message(text, clear=False)
 
     def _toggle_fullscreen(self):
         if self._fullscreen is not None:
@@ -649,6 +718,7 @@ class CameraPreviewPanel(QFrame):
         self._playing = False
         self._switching_quality = False
         self._url = ''
+        self._stop_talk()
         session, self._session = self._session, None
         self._player.stop()
         self._player.setSource(QUrl())
@@ -656,7 +726,7 @@ class CameraPreviewPanel(QFrame):
         if session is not None:
             session.stop()
         self._canvas.drag_enabled = False
-        self._drag_ready_at = 0
+        self._drag_ready_at = self._ptz_ready_at = 0
         self._canvas.set_drag_busy(False)
         self._canvas.message('')
         self._canvas.set_controls_enabled(False)

@@ -68,18 +68,23 @@ class CameraAccessTest(unittest.TestCase):
             except CameraPreviewError as error:
                 errors.append(error)
 
+        from app.core.camera_preview import _RelayHost
+        host = _RelayHost.instance()
         worker = threading.Thread(target=run, daemon=True)
         worker.start()
         try:
             self.assertTrue(started.wait(5), "helper must reach its relay stage")
-            process = session._process
+            process = host._process
+            self.assertIsNotNone(process)
             self.assertNotIn(source.client_private, str(process.args))
             self.assertNotIn(source.sign, str(process.args))
         finally:
             session.stop()
             worker.join(timeout=3)
         self.assertFalse(worker.is_alive())
-        self.assertIsNotNone(process.poll())
+        # 一个 JVM 常驻服务所有会话：取消的是会话而不是进程。
+        # 只要监听已注销、进程仍可复用，就没有泄漏。
+        self.assertFalse(host._listeners)
         self.assertTrue(errors)
 
 
@@ -243,12 +248,10 @@ class CameraPanelTest(unittest.TestCase):
         self.backend.stop.assert_called()
         self.service.set_power_state.assert_not_called()
 
-    def test_quality_mute_and_drag_use_existing_session_commands(self):
+    def test_mute_and_drag_use_existing_session_commands(self):
         self.panel._session = self.backend
         self.panel._playing = True
         self.panel._canvas.drag_enabled = True
-        self.panel._select_quality(2)
-        self.backend.command.assert_called_with('QUALITY', 2)
         self.panel._toggle_mute()
         self.assertFalse(self.panel._muted)
         self.backend.command.assert_called_with('AUDIO', 1)
@@ -306,17 +309,16 @@ class CameraPanelTest(unittest.TestCase):
         self.panel._drag(1)
         self.assertFalse(self.panel._canvas.drag_busy)
 
-    def test_quality_switch_reopens_local_viewer_without_new_remote_session(self):
+    def test_quality_switch_reconnects_instead_of_reusing_remote_session(self):
+        # 画质是会话级参数，摄像头只在新建会话时重新协商分辨率；
+        # 因此切换档位必须整段重连，而不是在原会话里发 QUALITY。
         self.panel._session = self.backend
         self.panel._url = 'http://127.0.0.1:1/camera-test.ts'
-        generation = self.panel._generation
-        self.panel._select_quality(2)
-        self.assertTrue(self.panel._switching_quality)
-        QTest.qWait(1000)
-        self.assertFalse(self.panel._switching_quality)
-        self.panel._player.play.assert_called_once()
-        self.assertEqual(self.panel._generation, generation)
-        self.backend.start.assert_not_called()
+        with patch.object(self.panel, 'start') as start:
+            self.panel._select_quality(1)
+            start.assert_called_once()
+        self.assertEqual(self.panel._quality, 1)
+        self.backend.command.assert_not_called()
 
     def test_muted_and_stale_audio_cannot_open_audio_output(self):
         with patch('app.ui.camera_preview.QAudioSink') as audio:
