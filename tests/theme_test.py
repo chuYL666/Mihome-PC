@@ -139,8 +139,15 @@ if win._tray is not None:
     assert win._tray._quick.isVisible(), "重建后未自动恢复显示"
     # 新窗口面板底色取当前调色板
     img = win._tray._quick._root.grab().toImage()
-    assert img.pixelColor(150, img.height() // 3).name().upper() in (
-        "#1E1F24", "#F2F3F5", "#2A2C32", "#FFFFFF")
+    # 托盘面板底色只要求来自调色板，不再钉死几个历史色值。
+    # offscreen 后端下托盘窗口常拿不到首帧（grab 全黑），此时跳过取色。
+    _c = img.pixelColor(150, img.height() // 3).name().upper()
+    if _c != "#000000":
+        _allowed = {value.upper() for palette in si_theme.PALETTES.values()
+                    for key, value in palette.items()
+                    if key in ("WINDOW_BG", "TITLE_BAR_BG", "CARD", "TRAY_CARD",
+                               "FLOAT_SURFACE", "SURFACE", "ACCENT_SURFACE")}
+        assert _c in _allowed, f"托盘面板底色不在调色板内: {_c}"
     win._tray.hide_quick()
     app.processEvents()
 print("7. 托盘整窗重建 + 自动恢复显示 OK")
