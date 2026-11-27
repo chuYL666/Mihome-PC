@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 
 import qtawesome as qta
 
-from app.core import settings_store, tray_store
+from app.core import settings_store, tray_store, voice_typing
 from app.core.jobs import JobExecutor
 from app.core.models import DeviceInfo, SceneInfo, is_speaker
 from app.core.device_controls import device_title, device_subtitle, has_device_details, supports_card_power, tray_eligible, is_camera as is_camera_device, is_light
@@ -45,6 +45,8 @@ from app.ui.typewriter import TypewriterPlaceholder
 
 _SHADOW_PAD = 6
 _PANEL_WIDTH = 400
+# 语音输入等待窗口：系统听写首句通常 3~6 秒内出字，留足余量后给提示
+_VOICE_LISTEN_MS = 20000
 _CARD_HEIGHT = 58
 _LIST_HEIGHT = 310  # Keep the viewport size independent of individual card heights.
 
@@ -199,6 +201,26 @@ class TrayQuickWindow(QDialog):
         self._voice_edit.installEventFilter(self)
         self._voice_edit.returnPressed.connect(self._emit_voice)
         voice_lay.addWidget(self._voice_edit)
+        # 麦克风：唤起 Windows 自带语音输入（Win+H），说完文字落进输入框，
+        # 回车发送。放在键盘按钮左侧，与「输入→发送」的阅读顺序一致。
+        self._mic_btn = QPushButton()
+        self._mic_btn.setFixedSize(28, 28)
+        self._mic_btn.setIcon(qta.icon('mdi.microphone-outline', color=SiColors.TEXT_PRIMARY))
+        self._mic_btn.setIconSize(QSize(21, 21))
+        self._mic_btn.setCursor(Qt.PointingHandCursor)
+        self._mic_btn.setAutoDefault(False)
+        self._mic_btn.setAccessibleName("语音输入")
+        self._mic_btn.setToolTip("语音输入（调用 Windows 语音输入，说完自动填入）")
+        # 悬停只在图标下垫一层主题色薄纱：输入条本身是浅一档的浮层色，
+        # 用 SURFACE 会压暗成一块凹陷，反而更脏
+        _mic_hover = QColor(SiColors.THEME)
+        _mic_hover.setAlpha(48)
+        self._mic_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; border-radius: 7px; }"
+            "QPushButton:hover { background: rgba(%d, %d, %d, %d); }"
+            % (_mic_hover.red(), _mic_hover.green(), _mic_hover.blue(), _mic_hover.alpha()))
+        self._mic_btn.clicked.connect(self._start_voice_input)
+        voice_lay.addWidget(self._mic_btn)
         send_btn = QPushButton()
         send_btn.setFixedSize(28, 28)
         send_btn.setIcon(qta.icon('mdi.keyboard-outline', color=SiColors.ON_THEME_TEXT))
@@ -216,6 +238,13 @@ class TrayQuickWindow(QDialog):
         # 占位打字机与主页悬浮球共用同一实现：常量、节奏、停留
         self._hint_full = "对小爱输入“打开卧室灯”，回车执行"
         self._typewriter = TypewriterPlaceholder(self._voice_edit, self._hint_full)
+        # 语音输入进行中：占位提示临时改成引导文案，等系统把文字注入
+        self._listening = False
+        self._listen_timer = QTimer(self)
+        self._listen_timer.setSingleShot(True)
+        self._listen_timer.setInterval(_VOICE_LISTEN_MS)
+        self._listen_timer.timeout.connect(self._voice_timeout)
+        self._voice_edit.textChanged.connect(self._on_voice_text_changed)
 
         # 底部输入框：占满宽度
         lay.addWidget(self._voice_frame)
@@ -495,6 +524,39 @@ class TrayQuickWindow(QDialog):
         else:
             self.resize(self.width(), h)
 
+    def _start_voice_input(self) -> None:
+        """唤起 Windows 语音输入，让系统把识别出的文字注入焦点输入框。
+
+        Qt 的 Windows 平台插件只走 IMM32，系统听写的文字能否落进来由
+        Windows 侧决定；这里负责聚焦输入框并给出「正在听」的反馈，
+        超时未收到文字时提示排查方向，避免看起来像按钮失灵。
+        """
+        if self._listening:
+            return
+        self._voice_edit.setFocus(Qt.OtherFocusReason)
+        if not voice_typing.supported():
+            self._voice_edit.setPlaceholderText('当前系统不支持语音输入，请直接键盘输入')
+            return
+        if not voice_typing.trigger():
+            self._voice_edit.setPlaceholderText('没能唤起系统语音输入，请直接键盘输入')
+            return
+        self._listening = True
+        self._typewriter.stop()
+        self._voice_edit.setPlaceholderText('正在听…说完文字会自动出现，回车执行')
+        self._listen_timer.start()
+
+    def _on_voice_text_changed(self, text: str) -> None:
+        if self._listening and text.strip():
+            self._listening = False
+            self._listen_timer.stop()
+            self._voice_edit.setPlaceholderText('')
+
+    def _voice_timeout(self) -> None:
+        self._listening = False
+        self._voice_edit.setPlaceholderText(
+            '没收到语音文字：确认麦克风可用，且系统已安装中文语音包')
+        self._typewriter.stop()
+
     def _emit_voice(self) -> None:
         text = self._voice_edit.text().strip()
         if not text:
@@ -510,6 +572,11 @@ class TrayQuickWindow(QDialog):
             fallback_note = f"（首选音箱离线，已由「{speaker.name}」代答）"
             settings_store.set_default_speaker_did("")
         self._voice_edit.clear()
+        # 语音输入或异常提示可能改写过占位文案，发送后恢复打字机动画
+        self._listening = False
+        self._listen_timer.stop()
+        if self._voice_frame.isVisible():
+            self._typewriter.start()
         self._jobs.submit(
             lambda: self._service.run_action(speaker.did, "execute-text-directive", [text]),
             on_success=lambda _, note=fallback_note, did=speaker.did: self._on_voice_success(text, note, did),
@@ -585,6 +652,9 @@ class TrayQuickWindow(QDialog):
 
         if not shiboken6.isValid(self) or not self.isVisible() or self._dragging:
             return
+        # 语音输入期间系统浮层会抢走激活态，这时收起窗口会让文字无处落地
+        if self._listening:
+            return
         # 只有真正失活且鼠标不在托盘窗口内才隐藏
         if self.isActiveWindow() or self.underMouse():
             return
@@ -643,6 +713,9 @@ class TrayQuickWindow(QDialog):
         self._pointer_has_entered = False
         self._leave_timer.stop()
         self._typewriter.stop()
+        # 窗口收起后语音输入的等待状态一律作废，否则下次弹出还停在「正在听」
+        self._listening = False
+        self._listen_timer.stop()
         self._remove_outside_filter()
         super().hideEvent(event)
 

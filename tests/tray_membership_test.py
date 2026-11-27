@@ -19,6 +19,13 @@ from tools.test_light_controls import VirtualLightService
 
 
 class TrayMembershipTest(unittest.TestCase):
+    # 右键菜单现在对所有设备都会带一条「设备功能 / 详情」，托盘项按文案查找
+    _TRAY_ACTIONS = ('添加到托盘窗口', '从托盘窗口移除')
+
+    @classmethod
+    def _tray_action(cls, menu):
+        return next(a for a in menu.actions() if a.text() in cls._TRAY_ACTIONS)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
@@ -71,12 +78,17 @@ class TrayMembershipTest(unittest.TestCase):
         quick.show()
         window._update_tray_devices = Mock(side_effect=lambda: quick.set_devices(window._all_devices, {}))
         quick.remove_tray_item_requested.connect(window._remove_tray_item)
-        self.assertIsNone(window._build_device_tray_menu(router.did))
+        # 路由器这类设备现在也能从右键打开只读详情，但不应提供「加入托盘」项
+        router_menu = window._build_device_tray_menu(router.did)
+        self.widgets.append(router_menu)
+        self.assertEqual([a.text() for a in router_menu.actions() if a.text()],
+                         ['设备功能 / 详情'])
         with patch('app.ui.main_window.Toast.info'):
             menu = window._build_device_tray_menu(light.did)
             self.widgets.append(menu)
-            self.assertEqual(menu.actions()[0].text(), '添加到托盘窗口')
-            menu.actions()[0].trigger()
+            tray_action = self._tray_action(menu)
+            self.assertEqual(tray_action.text(), '添加到托盘窗口')
+            tray_action.trigger()
         self.assertTrue(tray_store.contains(light.did))
         self.assertEqual(quick._grid.itemAt(0).widget()._did, light.did)
         editor = TrayManagerDialog(window._all_devices, scenes=[])
@@ -84,14 +96,14 @@ class TrayMembershipTest(unittest.TestCase):
         self.assertEqual(editor._checks[light.did].text(), '✓')
         menu = window._build_device_tray_menu(light.did)
         self.widgets.append(menu)
-        self.assertEqual(menu.actions()[0].text(), '从托盘窗口移除')
+        self.assertEqual(self._tray_action(menu).text(), '从托盘窗口移除')
         remove = quick._build_remove_tray_menu('device', light.did)
         self.widgets.append(remove)
         remove.actions()[0].trigger()
         self.assertFalse(tray_store.contains(light.did))
         menu = window._build_device_tray_menu(light.did)
         self.widgets.append(menu)
-        self.assertEqual(menu.actions()[0].text(), '添加到托盘窗口')
+        self.assertEqual(self._tray_action(menu).text(), '添加到托盘窗口')
         editor = TrayManagerDialog(window._all_devices, scenes=[])
         self.widgets.append(editor)
         self.assertEqual(editor._checks[light.did].text(), '+')
