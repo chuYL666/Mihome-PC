@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "D:\MijiaDeck-src\tests\theme_test.py", line 15, in <module>
+    from app.core import cache as _device_cache
+ModuleNotFoundError: No module named 'app'
