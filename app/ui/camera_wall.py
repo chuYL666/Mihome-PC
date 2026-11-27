@@ -37,7 +37,7 @@ class _CameraTile(QFrame):
     dual_requested = Signal(str)     # 双摄要开「云台 + 枪机」双画面窗口
     _pcm = Signal(int, int, bytes)   # 中继音频线程 → 主线程
 
-    def __init__(self, device, jobs, prepare, parent=None):
+    def __init__(self, device, jobs, prepare, parent=None, channel=0, lock_lens=False):
         super().__init__(parent)
         self._device = device
         self._jobs = jobs
@@ -47,7 +47,11 @@ class _CameraTile(QFrame):
         self._quality = 1
         self._switching = False
         self._dual_lens = getattr(device, 'model', '') == 'isa.camera.hlmax'
-        self._lens = 0            # 0=云台镜头，1=枪机镜头（第二路流）
+        self._lens = channel         # 0=云台镜头，1=枪机镜头（第二路流）
+        self._lens_locked = lock_lens  # 墙里双摄拆成两格后不再允许单格切镜头
+        self._wait_peer = False      # 第二路要等云台先出帧（见 CameraWallDialog._pump）
+        self._got_frame = False
+        self._start_at = 0.0
         self._url = ''
         self._player = None
         self._sink = None
@@ -71,7 +75,9 @@ class _CameraTile(QFrame):
         lay.setSpacing(4)
         header = QHBoxLayout()
         header.setContentsMargins(2, 0, 2, 0)
-        self._name = QLabel(f'{device.name}' + ('' if device.online else '（离线）'))
+        lens_tag = (' · 云台' if channel == 0 else ' · 枪机') if lock_lens else ''
+        self._name = QLabel(f'{device.name}{lens_tag}' +
+                           ('' if device.online else '（离线）'))
         self._name.setStyleSheet(f'color: {SiColors.TEXT_PRIMARY}; background: transparent; font-weight: 600;')
         header.addWidget(self._name, 1)
         self._quality_btn = QPushButton('480P')
@@ -81,10 +87,11 @@ class _CameraTile(QFrame):
         self._quality_btn.setEnabled(False)
         self._quality_btn.clicked.connect(lambda: self._show_quality(self._quality_btn))
         header.addWidget(self._quality_btn)
-        self._lens_btn = QPushButton('云台')
+        self._lens_btn = QPushButton('云台' if channel == 0 else '枪机')
         self._lens_btn.setFixedSize(44, 26)
         self._lens_btn.setCursor(Qt.PointingHandCursor)
-        self._lens_btn.setToolTip('双摄设备：切换云台/枪机镜头')
+        self._lens_btn.setToolTip('双画面（云台 + 枪机并排）' if lock_lens
+                                  else '双摄设备：切换云台/枪机镜头')
         self._lens_btn.setVisible(self._dual_lens)
         self._lens_btn.clicked.connect(self._show_lens_menu)
         header.addWidget(self._lens_btn)
@@ -96,7 +103,10 @@ class _CameraTile(QFrame):
         header.addWidget(self._open_btn)
         lay.addLayout(header)
         self._canvas = CameraCanvas(self)
-        self._canvas.set_fill(True)   # 格子比例跟 16:9 对不上，铺满比留黑边好看
+        # 完整显示，绝不裁剪：格子的宽高比由窗口决定，跟 16:9 对不上时
+        # 按 KeepAspectRatio 缩放留边。之前用「铺满 + 居中裁剪」，监控画面
+        # 两侧的人/车会被切掉，看墙的人以为设备没拍到。
+        self._canvas.set_fill(False)
         self._canvas.message('等待开始…' if device.online else '摄像头已离线')
         self._canvas.set_controls_enabled(False)
         self._canvas.retry.connect(self.start)
@@ -124,6 +134,8 @@ class _CameraTile(QFrame):
             return
         self._generation += 1
         generation = self._generation
+        self._got_frame = False
+        self._start_at = time.monotonic()
         self._canvas.message('正在申请视频连接…')
         session = CameraSession()
         self._session = session
@@ -176,6 +188,7 @@ class _CameraTile(QFrame):
             session.stop()
         self._url = ''
         self._frame_size = None
+        self._got_frame = False
         self._canvas.set_controls_enabled(False)
 
     def _on_connected(self, generation, url):
@@ -227,6 +240,7 @@ class _CameraTile(QFrame):
         if image.isNull():
             return
         self._timeout.stop()
+        self._got_frame = True
         self._canvas.set_frame(image)
         self._canvas.set_controls_enabled(True)
         self._quality_btn.setEnabled(True)
@@ -411,15 +425,16 @@ class _CameraTile(QFrame):
         from PySide6.QtCore import QPoint
         menu = QMenu(self)
         style_popup_menu(menu)
-        for channel, label in [(0, '云台镜头（可转向）'), (1, '枪机镜头（固定广角）')]:
-            action = menu.addAction(label)
-            action.setData(channel)
-            if channel == self._lens:
-                from qtawesome import icon as qta_icon
-                action.setIcon(qta_icon('mdi.check', color=SiColors.THEME_DIM))
-            action.triggered.connect(
-                lambda checked=False, c=channel: self._select_lens(c))
-        menu.addSeparator()
+        if not self._lens_locked:
+            for channel, label in [(0, '云台镜头（可转向）'), (1, '枪机镜头（固定广角）')]:
+                action = menu.addAction(label)
+                action.setData(channel)
+                if channel == self._lens:
+                    from qtawesome import icon as qta_icon
+                    action.setIcon(qta_icon('mdi.check', color=SiColors.THEME_DIM))
+                action.triggered.connect(
+                    lambda checked=False, c=channel: self._select_lens(c))
+            menu.addSeparator()
         dual = menu.addAction('双画面（云台 + 枪机并排）')
         dual.setToolTip('同一台设备同时开两路，两路画面并排显示')
         dual.triggered.connect(
@@ -460,6 +475,8 @@ class CameraWallDialog(QDialog):
         super().__init__(parent)
         self._service, self._jobs, self._devices = service, jobs, devices
         self._tiles: dict[str, _CameraTile] = {}
+        # 双摄一台设备占两格，按 did 反查两格（开双画面窗口/暂停恢复时用）
+        self._tile_by_did: dict[str, list[_CameraTile]] = {}
         self._pending: list[_CameraTile] = []
         self._active: list[_CameraTile] = []
         self._suspended = False   # 大窗/单格全屏期间，其余格子主动断开
@@ -493,10 +510,20 @@ class CameraWallDialog(QDialog):
         self._grid.setSpacing(10)
         self._layout.addWidget(host, 1)
         cams = [d for d in devices if '.camera.' in d.model]
-        cols = 1 if len(cams) <= 1 else (2 if len(cams) <= 4 else 3)
-        for index, device in enumerate(cams):
+        # 双摄（hlmax）自动占两格：云台 + 枪机同时在墙里出图，不用再点菜单
+        # 另开一个「双画面」窗口才能看到第二路。两格共用同一个 did，用
+        # 「did#1」作为第二格的键，其余按 did 查找的逻辑仍然成立。
+        entries: list[tuple[object, int, bool]] = []
+        for device in cams:
+            dual = getattr(device, 'model', '') == 'isa.camera.hlmax'
+            entries.append((device, 0, dual))
+            if dual:
+                entries.append((device, 1, dual))
+        cols = 1 if len(entries) <= 1 else (2 if len(entries) <= 4 else 3)
+        for index, (device, channel, dual) in enumerate(entries):
             tile = _CameraTile(device, jobs,
-                               lambda d=device: service.prepare_camera_source(d), host)
+                               lambda d=device: service.prepare_camera_source(d), host,
+                               channel=channel, lock_lens=dual)
             tile.connected.connect(self._on_connected)
             tile.failed.connect(self._on_failed)
             tile.progress.connect(self._on_progress)
@@ -505,34 +532,56 @@ class CameraWallDialog(QDialog):
             tile.fullscreen_changed.connect(self._on_tile_fullscreen)
             tile.dual_requested.connect(self._open_dual)
             tile._ensure_lens = self._ensure_lens
-            self._tiles[device.did] = tile
+            # 同一台设备两路不能同时鉴权：第二格等云台先出帧（最多 12 秒）
+            tile._wait_peer = (channel == 1)
+            self._tiles[device.did if channel == 0 else f'{device.did}#1'] = tile
+            self._tile_by_did.setdefault(device.did, []).append(tile)
             self._grid.addWidget(tile, index // cols, index % cols)
+        # 枪机镜头电源（siid 6 piid 26）默认可能是关的，先补一次属性写入；
+        # 等云台连上时这点时间早就够了
+        for device in cams:
+            if getattr(device, 'model', '') == 'isa.camera.hlmax':
+                self._ensure_lens(device, 1)
         for col in range(cols):
             self._grid.setColumnStretch(col, 1)
         self.retheme()
 
     def _open_dual(self, did):
-        """双画面窗口自己也占两路视频连接，先把这一格停掉，关窗后再接回来。"""
+        """双画面窗口自己也占两路视频连接，先把这一台的两格都停掉，关窗后再接回来。"""
         device = next((d for d in self._devices if d.did == did), None)
         if device is None:
             return
         from app.ui.camera_dual_view import DualCameraDialog
-        tile = self._tiles.get(did)
-        resumable = tile is not None and shiboken6.isValid(tile) and bool(tile._url)
-        if resumable:
+        tiles = [t for t in self._tile_by_did.get(did, [])
+                 if shiboken6.isValid(t)]
+        # 两格都要停，包括还在排队/正在鉴权的那格，否则墙会在双画面窗口
+        # 播放期间继续抢这台设备的两路连接
+        for tile in tiles:
+            if tile in self._pending:
+                self._pending.remove(tile)
+            if tile in self._active:
+                self._active.remove(tile)
             tile.stop()
         dialog = DualCameraDialog(self._service, self._jobs, device, 1, self)
-        if resumable:
+        for tile in tiles:
             dialog.finished.connect(lambda _=0, t=tile: self._resume_tile(t))
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
         dialog.start()
 
-    @staticmethod
-    def _resume_tile(tile):
-        if shiboken6.isValid(tile) and not tile._url:
-            tile.start()
+    def _resume_tile(self, tile):
+        """双画面窗口关掉后把格子重新排队，仍按「云台先出帧」错峰连回。
+
+        直接 start() 会让两路同时鉴权、互相顶掉，等于刚关窗就又坏一路。
+        """
+        if not shiboken6.isValid(tile) or tile._url:
+            return
+        if tile not in self._pending:
+            self._pending.append(tile)
+        self._pump()
+        if self._pending:
+            self._pump_timer.start()
 
     def retheme(self):
         for tile in self._tiles.values():
@@ -658,15 +707,33 @@ class CameraWallDialog(QDialog):
     def _update_status(self):
         if not shiboken6.isValid(self._title):
             return
+        valid = [t for t in self._tiles.values() if shiboken6.isValid(t)]
         total = len(self._tiles)
-        done = sum(1 for t in self._tiles.values() if shiboken6.isValid(t) and t._url)
+        devices = len({t._device.did for t in valid})
+        done = sum(1 for t in valid if t._url)
         waiting = len(self._pending)
-        text = f'摄像头墙 · {total} 台'
+        text = f'摄像头墙 · {devices} 台' + (f' / {total} 路' if total != devices else '')
         if self._suspended:
             text += '（大窗播放中，其余已暂停）'
         elif waiting or done < total:
             text += f'（已出画面 {done}，排队 {waiting}）'
         self._title.setText(text)
+
+    def _peer_still_connecting(self, tile):
+        """双摄第二路是否还在等云台。
+
+        实测（isa.camera.hlmax）：同一台设备两路会话同时去鉴权时，设备只认
+        后到的那路，先到的会被踢掉，结果只有一格出画面。这里以「云台已经
+        收到首帧」为放行条件，12 秒仍没出帧就放行，避免第二格被永久饿死。
+        """
+        if not getattr(tile, '_wait_peer', False):
+            return False
+        peer = self._tiles.get(tile._device.did)
+        if peer is None or not shiboken6.isValid(peer) or peer._session is None:
+            return False
+        if peer._got_frame:
+            return False
+        return time.monotonic() - peer._start_at < 12.0
 
     def _pump(self):
         if self._suspended:
@@ -675,12 +742,19 @@ class CameraWallDialog(QDialog):
         for tile in list(self._active):
             if not shiboken6.isValid(tile) or tile._url or tile._session is None:
                 self._active.remove(tile)
+        deferred = []
         while self._pending and len(self._active) < self._MAX_ACTIVE:
             tile = self._pending.pop(0)
             if not shiboken6.isValid(tile) or not tile._device.online:
                 continue
+            if self._peer_still_connecting(tile):
+                # 等云台出帧的第二路放回队首：一放行就优先开，别被后面
+                # 不相干的设备挤到队尾；本轮其它格子照常继续连。
+                deferred.append(tile)
+                continue
             self._active.append(tile)
             tile.start()
+        self._pending[0:0] = deferred
         self._update_status()
         if not self._pending and not self._active:
             self._pump_timer.stop()

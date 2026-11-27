@@ -67,9 +67,8 @@ class CameraCanvas(QWidget):
         super().__init__(parent)
         self.setMinimumSize(240, 135)
         self._image = QImage()
-        # 铺满模式：画面按「覆盖」缩放并居中裁剪，格子不留黑边。
-        # 九宫格的格子是方形偏高的，16:9 画面按「完整显示」会在上下留很宽的
-        # 黑边，看起来像画面没铺开；小格子里宁可裁掉两侧也要填满。
+        # 默认完整显示（KeepAspectRatio，不裁画面）；铺满模式由调用方显式开启。
+        # 摄像头墙等总览场景一律用默认值——居中裁剪会把监控画面边缘切掉。
         self._fill = False
         self._press = None
         self._drag_anchor = None

@@ -6,8 +6,8 @@
 - 同一台设备可以同时承载两路视频会话——主码流请求通道 0（云台），第二路
   走 `{"videoquality":-1,"videoquality2":N}`（枪机），两路各约 20 / 15 fps；
 - 但两路**不能同时去鉴权**：并发开两会话时设备只认后到的那个，先到的那路
-  会被踢掉（表现为一路有画面、另一路一直停在「等待画面」）。所以这里先开
-  云台，等它真的出帧（最多 6 秒）再开枪机；
+  会被踢掉（表现为一路有画面、另一路一直停在「等待画面」）。所以只在
+  云台真的出帧后才开枪机；云台迟迟不出帧时续等，约 24 秒后兜底放行；
 - 两路各自 `prepare_camera_source`，共用同一份授权参数也会互相顶掉；
 - 第二路要求枪机镜头电源是开的，否则能连上但没画面。
 
@@ -30,7 +30,7 @@ from app.ui.si_theme import SiColors
 
 _LENS_SIID = 6
 _LENS_SWITCH = {0: 25, 1: 26}      # 通道 → 镜头电源开关（云台 / 枪机）
-_SECONDARY_DELAY = 6000            # 云台最长等这么久就开第二路
+_SECONDARY_DELAY = 6000            # 每轮检查云台是否已出帧（最多续等 3 轮）
 
 
 class _LensPane(QWidget):
@@ -54,6 +54,9 @@ class _LensPane(QWidget):
         # 双画面各占一半宽度，不再按单画面留最小高度
         self.canvas.setMinimumSize(180, 80)
         self.video = AspectVideoLayout()
+        # 单画面窗口留 49px 侧边是为了不贴控制条；双画面各占半宽，
+        # 留那么多会把两路都挤成小方块，缩到 8px 让画面尽量大。
+        self.video.setContentsMargins(8, 4, 8, 0)
         self.video.addWidget(self.canvas)
         layout.addLayout(self.video, 1)
         self.retheme()
@@ -127,7 +130,8 @@ class DualCameraDialog(QDialog):
 
         self._secondary_timer = QTimer(self)
         self._secondary_timer.setSingleShot(True)
-        self._secondary_timer.timeout.connect(lambda: self._start_pane(1))
+        self._secondary_timer.timeout.connect(self._check_secondary)
+        self._secondary_waits = 0
 
         self._ready.connect(self._on_ready)
         self._failed.connect(self._on_failed)
@@ -142,11 +146,27 @@ class DualCameraDialog(QDialog):
             return
         self.stop()
         self._generation += 1
+        self._secondary_waits = 0
         for pane in self._panes:
             pane.canvas.message('正在申请视频连接…')
         # 先开云台，枪机等它出帧后再开（并发鉴权会互相顶掉）
         self._start_pane(0)
         self._secondary_timer.start(_SECONDARY_DELAY)
+
+    def _check_secondary(self):
+        """云台出帧后才开枪机；没出帧就续等，最多约 24 秒。
+
+        原来是 6 秒到点就无条件开第二路。云台中继慢一点时，这 6 秒正好
+        撞上它还在鉴权，两路并发的结果是设备只认后到的那路，于是永远
+        只有一格出画面——这正是「双画面还是不能同时显示」的典型成因。
+        """
+        primary = self._pane(0)
+        if (primary is not None and primary.frames == 0
+                and self._secondary_waits < 3):
+            self._secondary_waits += 1
+            self._secondary_timer.start(_SECONDARY_DELAY)
+            return
+        self._start_pane(1)
 
     def _start_pane(self, channel):
         pane = self._pane(channel)
