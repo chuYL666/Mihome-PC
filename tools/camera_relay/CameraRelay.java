@@ -5,13 +5,20 @@
  *        <devicePub> <sign> <quality> <channel>
  *   CMD  <id> <AUDIO 0|1 | QUALITY 0-3 | CHANNEL 0-3 | PTZ 1-4
  *            | TALK 0|1 | CODEC 1024|1026|1027|1032
- *            | MOTOR left|right|up|down|stop <speed> | AUD <b64>>
+ *            | MOTOR left|right|up|down|stop <speed> | AUD <b64>
+ *            | INDEX <channel> | PLAY <start> <end> [channels...]
+ *            | PLAYDIRECT <start> <end> [channels...] | LIVE
+ *            | FILE <timestamp> <channel>>
  *   CLOSE <id>
  *   QUIT
  *
  * stdout (one message per line): <id> <message>
  *   PHASE RELAY|AUTH|MEDIA, READY, ERROR <CODE>, NOTICE ..., INFO ...,
- *   AUDIO 8000 <b64>, AUDIO_OPUS <b64>, EXIT
+ *   AUDIO 8000 <b64>, AUDIO_OPUS <b64>, RDT <cmd> <b64>, PLAYBACK <b64>, EXIT
+ *
+ * SD-card playback: the clip catalogue travels on RDT channel 1 (command 6),
+ * the playback request is MISS 0x10D and its answer 0x10E; the camera then
+ * streams the recording on the same media channel 2 as live video.
  *
  * Two-way talk: TALK 1 sends MISS 0x106 (SPEAKER_START_REQ), then AUD carries
  * 40 ms audio frames on DRW channel 3; TALK 0 sends 0x108 (SPEAKER_STOP).
@@ -70,6 +77,16 @@ public final class CameraRelay {
         private volatile HttpStreamServer server;
         private final AtomicBoolean closed = new AtomicBoolean();
         private volatile int videoCodec;
+
+        // ---- SD-card playback ----
+        private volatile boolean playbackMode;
+        private int playbackId = 1;
+        // RDT is a byte stream: each encrypted chunk is one piece of a
+        // <u32 LE cmd><u32 LE length><payload> message.
+        private int rdtCmd = -1;
+        private int rdtWant = -1;
+        private final java.io.ByteArrayOutputStream rdtPayload =
+                new java.io.ByteArrayOutputStream();
 
         // ---- two-way talk / speaker uplink ----
         private final byte[] mediaKey;
@@ -169,6 +186,30 @@ public final class CameraRelay {
                     report(id, "NOTICE CODEC_SET");
                 } else if (text.startsWith("AUD ")) {
                     sendSpeakerAudio(text.substring(4));
+                } else if (text.matches("INDEX [0-9]{1,3}")) {
+                    int channel = Integer.parseInt(text.substring(6));
+                    if (connection == null) { report(id, "NOTICE INDEX_FAILED"); return; }
+                    sendRdt(6, indexPayload(channel));
+                    report(id, "NOTICE INDEX_SENT " + channel);
+                } else if (text.matches("PLAY -?[0-9]+ -?[0-9]+( [0-9]{1,3})*")) {
+                    startPlayback(text.substring(5), false);
+                } else if (text.matches("PLAYDIRECT -?[0-9]+ -?[0-9]+( [0-9]{1,3})*")) {
+                    // Some CS2-relay firmwares want the command id as the outer
+                    // channel-0 command instead of the 0x1001 envelope.
+                    startPlayback(text.substring(11), true);
+                } else if (text.equals("LIVE")) {
+                    playbackMode = false;
+                    if (camera != null) {
+                        camera.sendEncrypted(0x10D, playbackJson(playbackId++, 0, 0,
+                                new int[0]));
+                        restartVideo();
+                    }
+                    report(id, "NOTICE LIVE");
+                } else if (text.matches("FILE [0-9]+ [0-9]{1,3}")) {
+                    String[] parts = text.split(" ");
+                    if (connection == null) { report(id, "NOTICE INDEX_FAILED"); return; }
+                    sendRdt(1, filePayload(Long.parseLong(parts[1]),
+                            Integer.parseInt(parts[2])));
                 }
             } catch (Exception error) {
                 report(id, "NOTICE CONTROL_FAILED");
@@ -189,6 +230,114 @@ public final class CameraRelay {
             }
         }
 
+        /** MISS 0x10D body; every field is mandatory or the firmware drops it. */
+        static String playbackJson(int sessionId, long start, long end, int[] channels) {
+            StringBuilder s = new StringBuilder("{");
+            s.append("\"sessionid\":").append(sessionId);
+            s.append(",\"autoswitchtolive\":1,\"avchannelmerge\":1");
+            if (channels.length == 0) {
+                s.append(",\"starttime\":").append(start).append(",\"endtime\":").append(end);
+                s.append(",\"offset\":0,\"speed\":1");
+            } else {
+                s.append(",\"starttime\":").append(repeat(String.valueOf(start), channels.length));
+                s.append(",\"endtime\":").append(repeat(String.valueOf(end), channels.length));
+                s.append(",\"offset\":").append(repeat("0", channels.length));
+                s.append(",\"speed\":").append(repeat("1", channels.length));
+                s.append(",\"channel\":[");
+                for (int i = 0; i < channels.length; i++) {
+                    if (i > 0) s.append(',');
+                    s.append(channels[i]);
+                }
+                s.append(']');
+            }
+            return s.append('}').toString();
+        }
+
+        private static String repeat(String value, int count) {
+            StringBuilder s = new StringBuilder("[");
+            for (int i = 0; i < count; i++) {
+                if (i > 0) s.append(',');
+                s.append(value);
+            }
+            return s.append(']').toString();
+        }
+
+        private void startPlayback(String arguments, boolean direct) {
+            if (camera == null) { report(id, "NOTICE PLAYBACK_FAILED"); return; }
+            String[] parts = arguments.split(" ");
+            long start = Long.parseLong(parts[0]);
+            long end = Long.parseLong(parts[1]);
+            int[] channels = new int[parts.length - 2];
+            for (int i = 2; i < parts.length; i++) channels[i - 2] = Integer.parseInt(parts[i]);
+            String body = playbackJson(playbackId++, start, end, channels);
+            playbackMode = true;
+            if (direct) {
+                byte[] inner = new byte[4 + body.length()];
+                putBe32(inner, 0, 0x10D);
+                System.arraycopy(body.getBytes(StandardCharsets.UTF_8), 0, inner, 4,
+                        body.length());
+                connection.sendCommand(0x10D, MissCrypto.encrypt(mediaKey, inner));
+            } else {
+                camera.sendEncrypted(0x10D, body);
+            }
+            report(id, "NOTICE PLAYBACK_SENT");
+        }
+
+        private void sendRdt(int cmd, byte[] payload) {
+            byte[] plain = new byte[8 + payload.length];
+            putLe32(plain, 0, cmd);
+            putLe32(plain, 4, payload.length);
+            System.arraycopy(payload, 0, plain, 8, payload.length);
+            connection.sendRDT(MissCrypto.encrypt(mediaKey, plain));
+        }
+
+        static byte[] indexPayload(int channel) {
+            byte[] payload = new byte[24];
+            putLe32(payload, 8, channel);
+            return payload;
+        }
+
+        static byte[] filePayload(long timestamp, int channel) {
+            byte[] payload = new byte[12];
+            putLe32(payload, 0, (int) timestamp);
+            putLe32(payload, 8, channel);
+            return payload;
+        }
+
+        /** Reassemble the encrypted RDT byte stream and hand whole messages out. */
+        private void pumpRdt() {
+            while (!closed.get()) {
+                byte[] chunk = connection.nextRDT(Duration.ofMillis(250));
+                if (chunk == null) continue;
+                byte[] plain;
+                try { plain = MissCrypto.decrypt(mediaKey, chunk); }
+                catch (Exception ignored) { continue; }
+                if (rdtWant < 0) {
+                    if (plain.length < 8) continue;
+                    long want = le32(plain, 4);
+                    if (want < 0 || want > 16L * 1024 * 1024) { rdtPayload.reset(); continue; }
+                    rdtCmd = (int) le32(plain, 0);
+                    rdtWant = (int) want;
+                    rdtPayload.reset();
+                    rdtPayload.write(plain, 8, plain.length - 8);
+                } else {
+                    rdtPayload.write(plain, 0, plain.length);
+                }
+                if (rdtWant >= 0 && rdtPayload.size() >= rdtWant) {
+                    byte[] body = java.util.Arrays.copyOf(rdtPayload.toByteArray(), rdtWant);
+                    report(id, "RDT " + rdtCmd + " "
+                            + Base64.getEncoder().encodeToString(body));
+                    rdtCmd = rdtWant = -1;
+                    rdtPayload.reset();
+                }
+            }
+        }
+
+        private static long le32(byte[] data, int offset) {
+            return (data[offset] & 255L) | ((data[offset + 1] & 255L) << 8)
+                    | ((data[offset + 2] & 255L) << 16) | ((data[offset + 3] & 255L) << 24);
+        }
+
         void close() {
             if (!closed.getAndSet(true)) {
                 // Tell the camera to close its speaker before tearing the P2P
@@ -196,6 +345,10 @@ public final class CameraRelay {
                 // and refuse the next connection for a while.
                 if (talking && camera != null)
                     try { camera.sendEncrypted(0x108, ""); } catch (Exception ignored) { }
+                if (playbackMode && camera != null)
+                    try { camera.sendEncrypted(0x10D, playbackJson(playbackId++, 0, 0,
+                            new int[0])); }
+                    catch (Exception ignored) { }
                 talking = false;
                 try { if (camera != null) camera.stopVideo(); } catch (Exception ignored) { }
                 try { if (connection != null) connection.close(); } catch (Exception ignored) { }
@@ -243,8 +396,20 @@ public final class CameraRelay {
                 report(id, "INFO GOP_BOOTSTRAP");
                 report(id, "READY");
                 phase = "STREAM";
+                Thread rdtThread = new Thread(this::pumpRdt, "camera-rdt-" + id);
+                rdtThread.setDaemon(true);
+                rdtThread.start();
                 long lastFrame = System.nanoTime();
                 while (!closed.get()) {
+                    // 0x10E (playback status) shares the command channel with
+                    // the auth/quality acks; drain it without a second consumer.
+                    byte[] command = connection.nextCommand(Duration.ofMillis(1));
+                    if (command != null && command.length >= 4
+                            && ((command[0] & 255) << 24 | (command[1] & 255) << 16
+                                | (command[2] & 255) << 8 | (command[3] & 255)) == 0x10E) {
+                        report(id, "PLAYBACK " + Base64.getEncoder().encodeToString(
+                                java.util.Arrays.copyOfRange(command, 4, command.length)));
+                    }
                     MediaPacket packet = camera.nextMedia(Duration.ofSeconds(1));
                     if (packet != null && packet.isVideo()) {
                         videoInfo(packet);

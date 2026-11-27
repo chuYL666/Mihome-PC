@@ -7,7 +7,8 @@ from PySide6.QtCore import QEvent, QPoint, QTimer, QUrl, Signal, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtMultimedia import QMediaPlayer, QVideoSink, QAudioSink, QAudioFormat
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
-from app.core import camera_ptz
+from app.core import camera_playback as pb, camera_ptz
+from app.ui.camera_playback_dialog import CameraPlaybackDialog
 from app.core.camera_preview import CameraPreviewError, CameraSession, ERRORS, lens_power_on
 from app.core.camera_talk import TalkSession, speaker_codec
 from app.core.opus_decoder import OUTPUT_RATE as OPUS_RATE, OpusStreamDecoder
@@ -23,6 +24,7 @@ class CameraPreviewPanel(QFrame):
     _failed = Signal(int, object)
     _progress = Signal(int, str)
     _pcm = Signal(int, int, bytes)
+    _playback = Signal(int, str, object)
 
     def __init__(self, service, jobs, device, parent=None):
         super().__init__(parent)
@@ -51,6 +53,15 @@ class CameraPreviewPanel(QFrame):
         self._talk = None
         self._url = ''
         self._switching_quality = False
+        # ---- SD 卡回放 ----
+        self._playback_dlg = None
+        self._playback_clips: list[tuple[int, pb.Clip]] = []
+        self._playback_channels: list[int] = []
+        self._playback_index_channel = 0
+        self._playback_active = False
+        self._playback_index_timer = QTimer(self)
+        self._playback_index_timer.setSingleShot(True)
+        self._playback_index_timer.timeout.connect(self._playback_next_channel)
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(16)
@@ -72,6 +83,11 @@ class CameraPreviewPanel(QFrame):
         self._panel_btn.setToolTip('查看这台摄像头的全部可控功能、动作与设备信息')
         self._panel_btn.clicked.connect(self._show_device_panel)
         self.header.addWidget(self._panel_btn)
+        self._playback_btn = QPushButton('回放')
+        self._playback_btn.setCursor(Qt.PointingHandCursor)
+        self._playback_btn.setToolTip('回看摄像头 SD 卡里的历史录像')
+        self._playback_btn.clicked.connect(self._open_playback)
+        self.header.addWidget(self._playback_btn)
         self._dual_lens = getattr(device, 'model', '') == 'isa.camera.hlmax'
         self._lens_channel = 0   # 0=云台镜头，1=枪机镜头（第二路流）
         self._audio_seen = 0.0   # 最近一次收到 PCM 的时刻
@@ -121,6 +137,7 @@ class CameraPreviewPanel(QFrame):
         self._failed.connect(self._on_failed)
         self._progress.connect(self._on_progress)
         self._pcm.connect(self._on_pcm)
+        self._playback.connect(self._on_playback)
         self._timeout = QTimer(self)
         self._timeout.setSingleShot(True)
         self._timeout.timeout.connect(self._on_timeout)
@@ -261,6 +278,8 @@ class CameraPreviewPanel(QFrame):
             f'color: {SiColors.TEXT_SECONDARY}; border: none; border-radius: 8px; padding: 7px 12px; }}')
         if hasattr(self, '_panel_btn'):
             self._panel_btn.setStyleSheet(self._diagnostic_button.styleSheet())
+        if hasattr(self, '_playback_btn'):
+            self._playback_btn.setStyleSheet(self._diagnostic_button.styleSheet())
         if self._dual_lens:
             self._lens_btn.setStyleSheet(self._diagnostic_button.styleSheet())
 
@@ -404,7 +423,8 @@ class CameraPreviewPanel(QFrame):
                     url = session.start(source, quality=self._quality,
                         channel=self._lens_channel,
                         on_progress=lambda value: self._progress.emit(generation, value) if shiboken6.isValid(self) else None,
-                        on_audio=lambda rate, data: self._pcm.emit(generation, rate, data) if shiboken6.isValid(self) else None)
+                        on_audio=lambda rate, data: self._pcm.emit(generation, rate, data) if shiboken6.isValid(self) else None,
+                        on_playback=lambda kind, value: self._playback.emit(generation, kind, value) if shiboken6.isValid(self) else None)
                     if session.cancelled or not shiboken6.isValid(self):
                         session.stop()
                     else:
@@ -480,6 +500,113 @@ class CameraPreviewPanel(QFrame):
                     'PHASE MEDIA': '视频授权已完成，正在等待摄像头画面…'}.get(message)
             if text:
                 self._canvas.message(text)
+
+    # ---- SD 卡录像回放 ----
+
+    def _open_playback(self):
+        if self._session is None or not self._playing:
+            self._canvas.message('请先连上实时画面，再打开回放', clear=False)
+            return
+        if self._playback_dlg is not None:
+            self._playback_dlg.raise_()
+            self._playback_dlg.activateWindow()
+            self._request_index()
+            return
+        dlg = CameraPlaybackDialog(self, dual=self._dual_lens)
+        self._playback_dlg = dlg
+        dlg.play_requested.connect(self._play_clip)
+        dlg.direct_requested.connect(self._play_clip_direct)
+        dlg.refresh_requested.connect(self._request_index)
+        dlg.live_requested.connect(self._back_to_live)
+        dlg.finished.connect(self._forget_playback_dialog)
+        dlg.show()
+        self._request_index()
+
+    def _forget_playback_dialog(self):
+        self._playback_dlg = None
+        self._playback_index_timer.stop()
+
+    def _request_index(self):
+        if self._session is None:
+            return
+        self._playback_clips = []
+        self._playback_channels = list(pb.storage_channels(
+            getattr(self._device, 'model', ''), self._lens_channel))
+        if self._playback_dlg is not None:
+            self._playback_dlg.set_loading(True)
+        self._playback_next_channel()
+
+    def _playback_next_channel(self):
+        self._playback_index_timer.stop()
+        if self._session is None:
+            return
+        if not self._playback_channels:
+            if self._playback_dlg is not None:
+                self._playback_dlg.set_clips(self._playback_clips)
+            return
+        channel = self._playback_channels.pop(0)
+        self._playback_index_channel = channel
+        self._session.request_index(channel)
+        # 卡上没有该存储通道时摄像头会直接沉默，别让用户一直等
+        self._playback_index_timer.start(5000)
+
+    def _on_playback(self, generation, kind, value):
+        if generation != self._generation:
+            return
+        dlg = self._playback_dlg
+        if kind == 'index':
+            self._playback_clips.extend(
+                (self._playback_index_channel, clip) for clip in value)
+            self._playback_next_channel()
+            return
+        if dlg is None:
+            return
+        if kind == 'status':
+            if pb.status_found(value):
+                self._playback_active = True
+                duration = value.get('duration') if isinstance(value, dict) else None
+                suffix = f'，时长 {duration} 秒' if isinstance(duration, int) else ''
+                dlg.set_status(f'正在回放录像{suffix}。点「返回直播」恢复实时画面。')
+                dlg.set_playback_active(True)
+            else:
+                dlg.set_status('摄像头没找到这段录像（片段边界可能已变化）。'
+                               '可刷新索引，或点「换封装重试」。')
+                dlg.show_direct_retry()
+        elif kind == 'notice':
+            if value in ('INDEX_FAILED', 'PLAYBACK_FAILED'):
+                dlg.set_status('摄像头没有接受回放指令，可能是该机型或固件不支持。'
+                               '可点「换封装重试」再试一次。')
+                dlg.show_direct_retry()
+            elif value == 'LIVE':
+                self._playback_active = False
+                dlg.set_status('已请求返回直播，画面恢复需要几秒。')
+                dlg.set_playback_active(False)
+
+    def _play_clip(self, pair):
+        self._send_playback(pair, direct=False)
+
+    def _play_clip_direct(self, pair):
+        self._send_playback(pair, direct=True)
+
+    def _send_playback(self, pair, *, direct):
+        if self._session is None or pair is None:
+            return
+        channel, clip = pair
+        start, end = pb.playback_window(clip)
+        # 存储通道不是直播通道号；单摄留空让摄像头自己选主镜头
+        channels = [channel] if (self._dual_lens or channel) else []
+        method = self._session.play_direct if direct else self._session.play
+        if not method(start, end, channels):
+            if self._playback_dlg is not None:
+                self._playback_dlg.set_status('回放指令发送失败，请重试。')
+
+    def _back_to_live(self):
+        if self._session is not None:
+            self._session.back_to_live()
+        self._playback_active = False
+        if self._playback_dlg is not None:
+            self._playback_dlg.set_status('已请求返回直播，画面恢复需要几秒。')
+            self._playback_dlg.set_playback_active(False)
 
     def _on_frame(self, frame):
         if self._session is None or self._switching_quality or not frame.isValid():
@@ -715,6 +842,13 @@ class CameraPreviewPanel(QFrame):
     def stop(self):
         self._generation += 1
         self._timeout.stop()
+        self._playback_index_timer.stop()
+        if self._playback_dlg is not None:
+            dlg, self._playback_dlg = self._playback_dlg, None
+            dlg.close()
+        self._playback_active = False
+        self._playback_clips = []
+        self._playback_channels = []
         self._playing = False
         self._switching_quality = False
         self._url = ''

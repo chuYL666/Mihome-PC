@@ -42,3 +42,14 @@ and mu-law frames are decoded to 8 kHz mono PCM in memory. Other audio codecs ar
 reported as unsupported. QUALITY/AUDIO/PTZ commands use the existing stdin pipe;
 PTZ uses a single MISS 0x112 motor step per drag gesture, never a continuous move.
 Closing preview sends STOP and terminates any unresponsive owned process.
+
+SD-card playback (experimental, needs a real-camera check): `rdt_channel_patch.py`
+adds RDT channel 1 to the pinned PpppConnection at build time. `INDEX <channel>`
+sends RDT command 6 and the reassembled index is reported as `RDT 6 <base64>`;
+`PLAY <start> <end> [channels...]` sends MISS `0x10D`, whose `0x10E` reply is
+reported as `PLAYBACK <base64>`. The recording then arrives on the same media
+channel 2 as live video, so the local MPEG-TS player is unchanged. `LIVE` sends
+a zero-timestamp request and restarts video (some firmwares otherwise stay
+black). `PLAYDIRECT` variants send the encrypted command as the outer channel-0
+command instead of the `0x1001` envelope, for CS2-relay firmwares that ignore
+the envelope form. No media is written to disk by the relay.

@@ -41,7 +41,9 @@ def install(jdk=None):
         build = Path(folder)
         source = extract(SOURCE_URL, SOURCE_HASH, build / 'source')
         from tools.camera_relay.stream_bootstrap_patch import patch_http_stream_server
+        from tools.camera_relay.rdt_channel_patch import patch_pppp_connection
         patch_http_stream_server(source / 'src/main/java/micam/server/HttpStreamServer.java')
+        patch_pppp_connection(source / 'src/main/java/micam/pppp/PpppConnection.java')
         if jdk is None:
             jdk = extract(JDK_URL, JDK_HASH, build / 'jdk')
         jdk = Path(jdk)

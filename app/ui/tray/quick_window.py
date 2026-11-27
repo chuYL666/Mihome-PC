@@ -41,6 +41,7 @@ from app.ui.power_button import PowerButton
 from app.ui.si_theme import SiColors
 from app.ui.toast import Toast
 from app.ui.tray.audio_bar import _TrayAudioBar
+from app.ui.tray.quick_card_drag import QuickCardDragController
 from app.ui.typewriter import TypewriterPlaceholder
 
 _SHADOW_PAD = 6
@@ -141,6 +142,7 @@ class TrayQuickWindow(QDialog):
         self._edit_btn.setAccessibleName("编辑卡片")
         self._edit_btn.setIcon(_svg_icon("tray-edit.svg", "#222429"))
         self._edit_btn.setIconSize(QSize(16, 16))
+        self._edit_btn.setToolTip("编辑卡片（也可直接按住卡片拖动来排序）")
         self._edit_btn.setStyleSheet(
             "QPushButton { background: transparent; border: none; border-radius: 6px; }"
             f"QPushButton:hover {{ background: {SiColors.BTN_HOVER}; }}")
@@ -315,6 +317,9 @@ class TrayQuickWindow(QDialog):
         # Include the padding above the audio header: it is the visual top bar.
         for surface in (self, self._panel, self._audio_bar):
             surface.installEventFilter(self)
+        # 卡片拖拽排序：与「拖整个浮窗」共用鼠标事件，故单独做一个控制器
+        self._card_drag = QuickCardDragController(self)
+        self._card_rebuild_pending = False
 
     def _make_drag_handle(self, parent):
         handle = QLabel(parent)
@@ -652,6 +657,8 @@ class TrayQuickWindow(QDialog):
 
         if not shiboken6.isValid(self) or not self.isVisible() or self._dragging:
             return
+        if self._card_drag.active:
+            return  # 正在拖卡片排序，别把窗口收走
         # 语音输入期间系统浮层会抢走激活态，这时收起窗口会让文字无处落地
         if self._listening:
             return
@@ -680,13 +687,15 @@ class TrayQuickWindow(QDialog):
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
-        if self._pointer_has_entered and not self._dragging:
+        if self._pointer_has_entered and not self._dragging and not self._card_drag.active:
             self._leave_timer.start()
         super().leaveEvent(event)
 
     def _hide_after_pointer_leave(self) -> None:
         from PySide6.QtGui import QCursor
         from PySide6.QtWidgets import QApplication
+        if self._card_drag.active:
+            return  # 拖卡片时指针可能越过窗口边缘，不收起
         if self._light_control is not None:
             return  # Adjusting a light stays open until Return or outside activation.
         if not self.isVisible() or self._dragging or self.frameGeometry().contains(QCursor.pos()):
@@ -707,6 +716,10 @@ class TrayQuickWindow(QDialog):
     def hideEvent(self, event) -> None:  # noqa: N802
         if self._light_control is not None:
             self._light_control.reject()
+        drag = getattr(self, '_card_drag', None)
+        if drag is not None:
+            drag.cancel()
+        self._card_rebuild_pending = False
         self._tray_visible = False
         self._drag_start_global = self._drag_start_pos = None
         self._dragging = False
@@ -819,6 +832,11 @@ class TrayQuickWindow(QDialog):
                     break
 
     def _rebuild(self) -> None:
+        if self._card_drag.active:
+            # 后台 5s 轮询 / 主题切换撞上拖拽手势：先记账，手势结束后再
+            # 重建。此刻销毁卡片会连正在派发鼠标事件的控件一起删掉
+            self._card_rebuild_pending = True
+            return
         self._destroy_grid()
         if self._access_state != 'ready':
             from app.core.availability import MESSAGES
@@ -876,6 +894,9 @@ class TrayQuickWindow(QDialog):
         self._grid.setVerticalSpacing(6)
         for idx, row in enumerate(rows):
             self._grid.addWidget(row, idx // cols, idx % cols)
+            did = getattr(row, '_did', None)
+            key = ('device', did) if did is not None else ('scene', row._scene_id)
+            self._card_drag.bind(row, key)
         self._list_lay.addLayout(self._grid)
         self._list_lay.addStretch(1)
         online_dids = [d for d in dids if lookup.get(d) and lookup[d].online and self._known_power.get(d) is None]
@@ -887,6 +908,9 @@ class TrayQuickWindow(QDialog):
             self.refresh_power(online_dids)
 
     def _destroy_grid(self) -> None:
+        drag = getattr(self, '_card_drag', None)
+        if drag is not None:
+            drag.reset()
         grid = getattr(self, "_grid", None)
         if grid is None:
             return
@@ -1015,11 +1039,10 @@ class TrayQuickWindow(QDialog):
             tag = LightCornerTag(row, corner_radius=9, width=28, height=12, font_size=5.5)
             tag.raise_()
 
-        if has_device_details(dev) and dev.online:
-            row.mousePressEvent = lambda e, d=dev.did: self.open_device_requested.emit(d) if e.button() == Qt.LeftButton else None
-            row.setCursor(Qt.PointingHandCursor)
-        else:
-            row.setCursor(Qt.ArrowCursor)
+        # 点击打开详情交给 _card_drag 在「没拖动」的那次松开里触发；
+        # 卡片若自己覆盖 mousePressEvent，按下即打开会让拖拽无从下手
+        row._open_did = dev.did if (has_device_details(dev) and dev.online) else None
+        row.setCursor(Qt.PointingHandCursor if row._open_did else Qt.ArrowCursor)
         return row
 
     def _on_toggle_done(self, did: str, ns: bool, btn) -> None:
@@ -1075,6 +1098,7 @@ class TrayQuickWindow(QDialog):
         btn.clicked.connect(lambda _, s=scene, b=btn: self._run_scene(s, b))
         lay.addWidget(btn)
         row._scene_id = scene.scene_id  # type: ignore[attr-defined]
+        row._open_did = None  # type: ignore[attr-defined]
         self._attach_remove_menu(row, 'scene', scene.scene_id)
         return row
 
@@ -1227,7 +1251,7 @@ class TrayQuickWindow(QDialog):
             return
         # 失焦触发：与 deactivate 同一套排除逻辑，避免管理对话框/详情
         # 等本应用窗口打开时误隐藏托盘
-        if self._dragging or self.isActiveWindow() or self.underMouse():
+        if self._dragging or self._card_drag.active or self.isActiveWindow() or self.underMouse():
             return
         from PySide6.QtWidgets import QApplication
         active = QApplication.activeWindow()

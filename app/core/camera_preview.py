@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from app import resource_path
+from app.core import camera_playback
 
 _DLL_SEARCH_LOCK = threading.Lock()
 
@@ -193,10 +194,10 @@ class CameraSession:
         return self._cancelled.is_set()
 
     def start(self, source, on_progress=lambda _: None, *, quality=1, on_audio=None,
-              channel=0) -> str:
+              channel=0, on_playback=None) -> str:
         """Run on a dedicated worker, so relay negotiation cannot block cloud controls."""
         try:
-            return self._start(source, on_progress, quality, on_audio, channel)
+            return self._start(source, on_progress, quality, on_audio, channel, on_playback)
         except CameraPreviewError:
             self.stop()
             raise
@@ -204,7 +205,7 @@ class CameraSession:
             self.stop()
             raise CameraPreviewError("远程视频连接启动失败，请稍后重试。", code='CONFIG') from None
 
-    def _start(self, source, on_progress, quality, on_audio, channel=0):
+    def _start(self, source, on_progress, quality, on_audio, channel=0, on_playback=None):
         port, path = _free_port(), "/camera-" + uuid.uuid4().hex + ".ts"
         fields = [str(port), path, source.uid, source.init_string, source.client_public,
                   source.client_private, source.device_public, source.sign, str(quality),
@@ -241,6 +242,14 @@ class CameraSession:
                         on_audio(0, packet)
                 except ValueError:
                     pass
+                return
+            # ---- SD 卡回放：索引走 RDT channel 1，状态走 MISS 0x10E ----
+            parsed = camera_playback.parse_relay_message(message)
+            if parsed is not None:
+                if on_playback:
+                    on_playback(*parsed)
+                if parsed[0] == "notice":
+                    on_progress(message)
                 return
             if message in {"NOTICE AUDIO_UNSUPPORTED", "NOTICE CONTROL_FAILED",
                            "NOTICE QUALITY_REJECTED", "NOTICE AUDIO_ON",
@@ -321,6 +330,43 @@ class CameraSession:
         if not packet or len(packet) > 4096:
             return False
         return self._send("AUD " + base64.b64encode(packet).decode('ascii'))
+
+    # ---- SD 卡回放命令（中继侧按空格解析）----
+    def request_index(self, channel=0):
+        """取回某个存储通道上的全部录像片段索引。"""
+        try:
+            channel = int(channel)
+        except (TypeError, ValueError):
+            return False
+        return self._send(f"INDEX {max(0, min(999, channel))}")
+
+    def play(self, start, end, channels=None):
+        """按片段的精确起始秒请求回放；channels 给双摄的两个存储通道。"""
+        try:
+            start, end = int(start), int(end)
+            suffix = "".join(f" {max(0, min(999, int(c)))}" for c in (channels or []))
+        except (TypeError, ValueError):
+            return False
+        return self._send(f"PLAY {start} {end}{suffix}")
+
+    def play_direct(self, start, end, channels=None):
+        """CS2 中继固件若不吃 0x1001 包络，改用外层命令直发。"""
+        try:
+            start, end = int(start), int(end)
+            suffix = "".join(f" {max(0, min(999, int(c)))}" for c in (channels or []))
+        except (TypeError, ValueError):
+            return False
+        return self._send(f"PLAYDIRECT {start} {end}{suffix}")
+
+    def back_to_live(self):
+        return self._send("LIVE")
+
+    def request_file(self, timestamp, channel=0):
+        try:
+            timestamp, channel = int(timestamp), int(channel)
+        except (TypeError, ValueError):
+            return False
+        return self._send(f"FILE {timestamp} {channel}")
 
     def stop(self):
         self._cancelled.set()
